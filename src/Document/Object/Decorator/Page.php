@@ -11,9 +11,7 @@ use PrinsFrank\PdfParser\Document\Dictionary\Dictionary;
 use PrinsFrank\PdfParser\Document\Dictionary\DictionaryKey\DictionaryKey;
 use PrinsFrank\PdfParser\Document\Dictionary\DictionaryValue\Rectangle\Rectangle;
 use PrinsFrank\PdfParser\Document\Dictionary\DictionaryValue\Reference\ReferenceValue;
-use PrinsFrank\PdfParser\Document\Dictionary\DictionaryValue\Reference\ReferenceValueArray;
 use PrinsFrank\PdfParser\Document\Dictionary\DictionaryValue\TextString\NameObjectStringValue;
-use PrinsFrank\PdfParser\Document\Object\Item\UncompressedObject\UncompressedObject;
 use PrinsFrank\PdfParser\Exception\InvalidArgumentException;
 use PrinsFrank\PdfParser\Exception\ParseFailureException;
 use PrinsFrank\PdfParser\Exception\PdfParserException;
@@ -46,26 +44,9 @@ class Page extends DecoratedObject {
             return null;
         }
 
-        $contents = $this->document->getObjectsByDictionaryKey($this->getDictionary(), DictionaryKey::CONTENTS);
-        if (count($contents) === 1 && ($references = $this->indirectReferenceArray($contents[0])) !== null) {
-            $contents = array_map(
-                fn (ReferenceValue $reference) => $this->document->getObject($reference->objectNumber) ?? throw new ParseFailureException(sprintf('Content stream with object nr %d not found', $reference->objectNumber)),
-                $references->referenceValues,
-            );
-        }
-
-        return ContentStreamParser::parse($contents);
-    }
-
-    /** Contents can also be a reference to an array of references to the content streams */
-    private function indirectReferenceArray(DecoratedObject $object): ?ReferenceValueArray {
-        $item = $object->objectItem;
-        if ($item instanceof UncompressedObject
-            && preg_match('/^\s*\d+\s+\d+\s+obj\s*\[/', $this->document->stream->read($item->startOffset, min(256, $item->endOffset - $item->startOffset))) !== 1) {
-            return null;
-        }
-
-        return ReferenceValueArray::fromValue($object->getStream()->toString());
+        return ContentStreamParser::parse(
+            $this->document->getObjectsByDictionaryKey($this->getDictionary(), DictionaryKey::CONTENTS),
+        );
     }
 
     /** @throws PdfParserException */

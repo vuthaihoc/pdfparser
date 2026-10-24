@@ -195,12 +195,8 @@ class Font extends DecoratedObject {
             return $this->descendantFontsCache = [];
         }
 
-        if ($valueType === ReferenceValue::class) {
-            $descendantFontsReference = $this->getDictionary()->getValueForKey($this->document, DictionaryKey::DESCENDANT_FONTS, ReferenceValue::class) ?? throw new ParseFailureException();
-            return [
-                $this->document->getObject($descendantFontsReference->objectNumber, Font::class)
-                    ?? throw new ParseFailureException(sprintf('Descendant font with number %d could not be found', $descendantFontsReference->objectNumber)),
-            ];
+        if ($valueType === ReferenceValue::class) { // a reference to the array of descendant fonts, or (non-standard) to the font itself
+            return $this->descendantFontsCache = array_values($this->document->getObjectsByDictionaryKey($this->getDictionary(), DictionaryKey::DESCENDANT_FONTS, Font::class));
         }
 
         if ($valueType === DictionaryArrayValue::class) {

@@ -47,21 +47,26 @@ readonly class PositionedTextElement {
 
     /**
      * Character codes of the shown strings: a byte each for simple fonts, two bytes each for composite (Type0) fonts,
-     * which is what font widths are keyed by (Identity-H/V: the code is the CID).
+     * which is what font widths are keyed by (Identity-H/V: the code is the CID). From the bytes of the strings:
+     * getCodePoints() of a hexadecimal string has two bytes per entry.
      *
      * @return list<int>
      */
     public function getCharacterCodes(Font $font): array {
+        $bytes = [];
+        foreach ($this->textSegments as $textSegment) {
+            foreach (str_split($textSegment->textString->getBinaryString()) as $byte) {
+                $bytes[] = ord($byte);
+            }
+        }
+
         if ($font->getDescendantFonts() === []) {
-            return $this->getCodePoints();
+            return $bytes;
         }
 
         $codes = [];
-        foreach ($this->textSegments as $textSegment) {
-            $bytes = $textSegment->textString->getCodePoints();
-            for ($i = 0; $i + 1 < count($bytes); $i += 2) {
-                $codes[] = ($bytes[$i] << 8) | $bytes[$i + 1];
-            }
+        for ($i = 0; $i + 1 < count($bytes); $i += 2) {
+            $codes[] = ($bytes[$i] << 8) | $bytes[$i + 1];
         }
 
         return $codes;

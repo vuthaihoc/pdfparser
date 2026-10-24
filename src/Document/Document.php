@@ -5,6 +5,7 @@ namespace PrinsFrank\PdfParser\Document;
 
 use PrinsFrank\PdfParser\Document\CrossReference\Source\CrossReferenceSource;
 use PrinsFrank\PdfParser\Document\CrossReference\Source\Section\SubSection\Entry\CrossReferenceEntryCompressed;
+use PrinsFrank\PdfParser\Document\CrossReference\Source\Section\SubSection\Entry\CrossReferenceEntryInUseObject;
 use PrinsFrank\PdfParser\Document\Dictionary\Dictionary;
 use PrinsFrank\PdfParser\Document\Dictionary\DictionaryKey\DictionaryKey;
 use PrinsFrank\PdfParser\Document\Dictionary\DictionaryValue\Reference\ReferenceValue;
@@ -107,7 +108,15 @@ class Document {
     public function getObjectsByDictionaryKey(Dictionary $dictionary, DictionaryKey $dictionaryKey, ?string $expectedDecoratorFQN = null): array {
         $dictionaryValueType = $dictionary->getTypeForKey($dictionaryKey);
         if ($dictionaryValueType === ReferenceValue::class) {
-            return [$this->getObject($dictionary->getValueForKey($this, $dictionaryKey, ReferenceValue::class)->objectNumber ?? throw new ParseFailureException(), $expectedDecoratorFQN) ?? throw new ParseFailureException()];
+            $objectNumber = $dictionary->getValueForKey($this, $dictionaryKey, ReferenceValue::class)->objectNumber ?? throw new ParseFailureException();
+            if (($referenceValues = $this->referencedReferenceArray($objectNumber)) !== null) { // e.g. /Contents 4 0 R with 4 0 obj [5 0 R 6 0 R]
+                return array_map(
+                    fn(ReferenceValue $referenceValue) => $this->getObject($referenceValue->objectNumber, $expectedDecoratorFQN) ?? throw new ParseFailureException(),
+                    $referenceValues->referenceValues,
+                );
+            }
+
+            return [$this->getObject($objectNumber, $expectedDecoratorFQN) ?? throw new ParseFailureException()];
         } elseif ($dictionaryValueType === ReferenceValueArray::class) {
             return array_map(
                 fn(ReferenceValue $referenceValue) => $this->getObject($referenceValue->objectNumber, $expectedDecoratorFQN) ?? throw new ParseFailureException(),
@@ -116,6 +125,23 @@ class Document {
         }
 
         throw new ParseFailureException(sprintf('Dictionary value with key "%s" is of type "%s", expected referencevalue(array)', $dictionaryKey->name, $dictionaryValueType ?? 'null'));
+    }
+
+    /** The references in object $objectNumber when it is an array of references, null for other objects */
+    private function referencedReferenceArray(int $objectNumber): ?ReferenceValueArray {
+        $crossReferenceEntry = $this->crossReferenceSource->getCrossReferenceEntry($objectNumber, $this);
+        if ($crossReferenceEntry instanceof CrossReferenceEntryInUseObject) {
+            $head = $this->stream->read($crossReferenceEntry->byteOffsetInDecodedStream, min(256, $this->stream->getSizeInBytes() - $crossReferenceEntry->byteOffsetInDecodedStream));
+            if (preg_match('/^\s*\d+\s+\d+\s+obj\s*\[/', $head) !== 1) {
+                return null;
+            }
+        } elseif ($crossReferenceEntry === null) {
+            return null;
+        }
+
+        $object = $this->getObject($objectNumber);
+
+        return $object === null ? null : ReferenceValueArray::fromValue($object->getStream()->toString());
     }
 
     /**
