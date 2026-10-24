@@ -54,6 +54,7 @@ class ContentStreamParser {
         'f*' => PathPaintingOperator::FILL_EVEN_ODD,
         'B*' => PathPaintingOperator::FILL_STROKE_EVEN_ODD,
         'b*' => PathPaintingOperator::CLOSE_FILL_STROKE,
+        'sh' => PathPaintingOperator::PAINT_SHADING,
         'Td' => TextPositioningOperator::MOVE_OFFSET,
         'TD' => TextPositioningOperator::MOVE_OFFSET_LEADING,
         'Tm' => TextPositioningOperator::SET_MATRIX,
@@ -95,6 +96,7 @@ class ContentStreamParser {
         'F' => PathPaintingOperator::FILL_DEPRECATED,
         'B' => PathPaintingOperator::FILL_STROKE,
         'n' => PathPaintingOperator::END,
+        'b' => PathPaintingOperator::CLOSE_FILL_STROKE_NON_ZERO,
         '\'' => TextShowingOperator::MOVE_SHOW,
         '"' => TextShowingOperator::MOVE_SHOW_SPACING,
     ];
@@ -124,8 +126,17 @@ class ContentStreamParser {
                 }
 
                 if ($inInlineImage) {
-                    if ($char === 'I' && $previousChar === 'E' && $secondToLastChar !== '\\') {
+                    if ($char === 'I' && $previousChar === 'E'
+                        && ($secondToLastChar === ' ' || $secondToLastChar === "\n" || $secondToLastChar === "\r" || $secondToLastChar === "\t" || $secondToLastChar === "\0")
+                        && (($nextChar = $rawStream[$index + 1] ?? '') === '' || ctype_space($nextChar))) {
                         $inInlineImage = false;
+                        $command = new ContentStreamCommand(InlineImageOperator::End, substr($rawStream, $startCurrentOperandIndex, max(0, $index - 2 - $startCurrentOperandIndex)));
+                        if ($textObject !== null) {
+                            $textObject->addContentStreamCommand($command);
+                        } else {
+                            $content[] = $command;
+                        }
+                        $startCurrentOperandIndex = $index + 1;
                     }
                 } elseif ($inStringLiteral) {
                     if ($char === ')' && $previousChar !== '\\') {

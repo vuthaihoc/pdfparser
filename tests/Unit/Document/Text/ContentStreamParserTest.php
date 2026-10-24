@@ -390,4 +390,52 @@ class ContentStreamParserTest extends TestCase {
             }
         }
     }
+
+    public function testParseShadingAndCloseFillStroke(): void {
+        $contentStream = FileStream::fromString(
+            <<<EOD
+                q
+                /Sh0 sh
+                Q
+                10 10 m
+                20 20 l
+                b
+                30 30 m
+                40 40 l
+                b*
+            EOD,
+        );
+        $decoratedObject = $this->createMock(GenericObject::class);
+        $decoratedObject->expects(self::once())->method('getStream')->willReturn($contentStream);
+        static::assertEquals(
+            new ContentStream(
+                new ContentStreamCommand(GraphicsStateOperator::SaveCurrentStateToStack, ''),
+                new ContentStreamCommand(PathPaintingOperator::PAINT_SHADING, '/Sh0'),
+                new ContentStreamCommand(GraphicsStateOperator::RestoreMostRecentStateFromStack, ''),
+                new ContentStreamCommand(PathConstructionOperator::MOVE, '10 10'),
+                new ContentStreamCommand(PathConstructionOperator::LINE, '20 20'),
+                new ContentStreamCommand(PathPaintingOperator::CLOSE_FILL_STROKE_NON_ZERO, ''),
+                new ContentStreamCommand(PathConstructionOperator::MOVE, '30 30'),
+                new ContentStreamCommand(PathConstructionOperator::LINE, '40 40'),
+                new ContentStreamCommand(PathPaintingOperator::CLOSE_FILL_STROKE, ''),
+            ),
+            ContentStreamParser::parse([$decoratedObject]),
+        );
+    }
+
+    public function testParseInlineImage(): void {
+        $contentStream = FileStream::fromString("q\n2 0 0 2 0 0 cm\nBI\n/W 2 /H 1 /BPC 8 /CS /G\nID \x00\xFF\nEI\nQ\n");
+        $decoratedObject = $this->createMock(GenericObject::class);
+        $decoratedObject->expects(self::once())->method('getStream')->willReturn($contentStream);
+        static::assertEquals(
+            new ContentStream(
+                new ContentStreamCommand(GraphicsStateOperator::SaveCurrentStateToStack, ''),
+                new ContentStreamCommand(GraphicsStateOperator::ModifyCurrentTransformationMatrix, '2 0 0 2 0 0'),
+                new ContentStreamCommand(InlineImageOperator::Begin, ''),
+                new ContentStreamCommand(InlineImageOperator::End, "\n/W 2 /H 1 /BPC 8 /CS /G\nID \x00\xFF"),
+                new ContentStreamCommand(GraphicsStateOperator::RestoreMostRecentStateFromStack, ''),
+            ),
+            ContentStreamParser::parse([$decoratedObject]),
+        );
+    }
 }
