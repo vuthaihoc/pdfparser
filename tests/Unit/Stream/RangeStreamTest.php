@@ -31,7 +31,7 @@ class RangeStreamTest extends TestCase {
         }
 
         $expected = new InMemoryStream($content);
-        $actual = new RangeStream(static fn (int $from, int $to): string => substr($content, $from, $to - $from + 1), strlen($content), $blockSize);
+        $actual = new RangeStream(static fn(int $from, int $to): string => substr($content, $from, $to - $from + 1), strlen($content), $blockSize);
         $size = strlen($content);
         static::assertSame($size, $actual->getSizeInBytes());
         static::assertSame($content, $actual->toString());
@@ -112,7 +112,7 @@ class RangeStreamTest extends TestCase {
             static function (array $ranges) use ($content, &$many): array {
                 $many[] = $ranges;
 
-                return array_map(static fn (array $range) => substr($content, $range[0], $range[1] - $range[0] + 1), $ranges);
+                return array_map(static fn(array $range) => substr($content, $range[0], $range[1] - $range[0] + 1), $ranges);
             },
         );
         $stream->read(30, 5);

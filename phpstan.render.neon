@@ -1,0 +1,10 @@
+# The experimental renderer (src/Render), not yet at the level of the parser (phpstan.neon)
+parameters:
+    tmpDir: ./cache/.phpstan.render.result.cache
+    level: 5
+    paths:
+        - src/Render
+    phpVersion: 80300
+    treatPhpDocTypesAsCertain: false
+includes:
+    - phar://phpstan.phar/conf/bleedingEdge.neon

@@ -22,9 +22,7 @@ use PrinsFrank\PdfParser\Exception\RuntimeException;
 class RangeStream extends AbstractStream {
     /** @var array<int, string> block number => bytes */
     private array $blocks = [];
-
     public int $requests = 0;
-
     public int $bytesFetched = 0;
 
     /**
@@ -112,7 +110,7 @@ class RangeStream extends AbstractStream {
             return;
         }
 
-        $byteRanges = array_map(fn (array $run): array => [$run[0] * $this->blockSize, min($this->size, ($run[1] + 1) * $this->blockSize) - 1], $runs);
+        $byteRanges = array_map(fn(array $run): array => [$run[0] * $this->blockSize, min($this->size, ($run[1] + 1) * $this->blockSize) - 1], $runs);
         foreach (($this->fetchMany)($byteRanges) as $i => $bytes) {
             [$from, $to] = $byteRanges[$i];
             if (strlen($bytes) !== $to - $from + 1) {

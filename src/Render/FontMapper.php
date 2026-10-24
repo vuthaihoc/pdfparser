@@ -23,7 +23,6 @@ final class FontMapper {
 
     /** @var array<string, array<string, float>> font file => character => width at size 100 */
     private array $widths = [];
-
     private ?Imagick $probe = null;
 
     /** @var array<string, ImagickDraw> */
@@ -33,7 +32,7 @@ final class FontMapper {
     public function file(?string $baseFont, bool $bold, bool $italic, string $text = '', ?int $flags = null): string {
         $name = strtolower(preg_replace('/^[A-Z]{6}\+/', '', (string) $baseFont) ?? '');
         $byName = match (true) {
-            preg_match('/cour|mono|consol|code|typewriter/', $name) === 1 => 'Liberation Mono',
+            preg_match('/cour|mono|consolas|code|typewriter/', $name) === 1 => 'Liberation Mono',
             preg_match('/sans|helvet|arial|frutiger|univers|futura|gill|verdana|tahoma|calibri|segoe|myriad|roboto|open ?sans|lato|din|avenir|optima|trebuchet/', $name) === 1 => 'Liberation Sans',
             preg_match('/times|serif|roman|georgia|garamond|cambria|book|minion|palatino|century|baskerville|caslon|cmr|nimbusrom|bodoni|charter/', $name) === 1 => 'Liberation Serif',
             default => null,
@@ -147,15 +146,13 @@ final class FontMapper {
 
         return $this->glyphFonts[$fontObjectNumber] = [
             'file' => $this->cacheDirectory() . '/' . $cached['file'],
-            'map' => static fn (int $code): ?int => $table[$code] ?? ($identity !== null && $code > 0 && $code < $identity ? $code : null),
+            'map' => static fn(int $code): ?int => $table[$code] ?? ($identity !== null && $code > 0 && $code < $identity ? $code : null),
             'space' => $cached['space'],
             'glyphCount' => $cached['glyphCount'],
         ];
     }
 
-    /**
-     * The object of the embedded program of a font that is not in the cache yet, to fetch it ahead (RawObjects::prefetch())
-     */
+    /** The object of the embedded program of a font that is not in the cache yet, to fetch it ahead (RawObjects::prefetch()) */
     public function programToFetch(RawObjects $objects, int $fontObjectNumber): ?int {
         if (array_key_exists($fontObjectNumber, $this->glyphFonts)) {
             return null;
@@ -264,7 +261,7 @@ final class FontMapper {
             $map = match (true) {
                 $ttf !== null => $this->trueTypeCodeMap($objects, $top, $ttf),
                 $cff !== null => $this->namedCodeMap($objects, $top, $cff->glyphNames(), $cff->gidForCode(...)),
-                default => $this->namedCodeMap($objects, $top, $type1->glyphNames(), static fn (int $code): ?int => $type1->gidForName($type1->builtInName($code) ?? '')),
+                default => $this->namedCodeMap($objects, $top, $type1->glyphNames(), static fn(int $code): ?int => $type1->gidForName($type1->builtInName($code) ?? '')),
             };
             for ($code = 0; $code < 256; $code++) {
                 if (($gid = $map($code)) !== null && $gid > 0 && $gid < $glyphCount) {
@@ -273,7 +270,7 @@ final class FontMapper {
             }
         }
 
-        $gidOf = static fn (int $code): ?int => $table[$code] ?? ($identity !== null && $code > 0 && $code < $identity ? $code : null);
+        $gidOf = static fn(int $code): ?int => $table[$code] ?? ($identity !== null && $code > 0 && $code < $identity ? $code : null);
         // a glyph gets the width of the first code that shows it; codes named by Differences go first, an unused
         // code can reach the same glyph through the built-in encoding with a placeholder width
         $advances = [];
@@ -312,27 +309,27 @@ final class FontMapper {
     private function pdfWidths(RawObjects $objects, array $top, array $font, array $descriptor, bool $composite): array {
         $widths = [];
         if (!$composite) {
-            $first = (int) ($objects->number($top['FirstChar'] ?? 0) ?? 0);
+            $first = (int) $objects->number($top['FirstChar'] ?? 0);
             foreach ($objects->array($top['Widths'] ?? null) ?? [] as $i => $width) {
-                $widths[$first + $i] = (float) ($objects->number($width) ?? 0);
+                $widths[$first + $i] = $objects->number($width);
             }
 
-            return [$widths, (float) ($objects->number($descriptor['MissingWidth'] ?? 0) ?? 0)];
+            return [$widths, $objects->number($descriptor['MissingWidth'] ?? 0)];
         }
 
         $entries = $objects->array($font['W'] ?? null) ?? [];
         for ($i = 0; $i < count($entries); $i++) {
-            $first = (int) ($objects->number($entries[$i]) ?? 0);
+            $first = (int) $objects->number($entries[$i]);
             $next = $objects->resolve($entries[$i + 1] ?? null);
             if (is_array($next)) {
                 foreach (array_values($next) as $j => $width) {
-                    $widths[$first + $j] = (float) ($objects->number($width) ?? 0);
+                    $widths[$first + $j] = $objects->number($width);
                 }
 
                 $i++;
             } else {
-                $last = (int) ($objects->number($next) ?? $first);
-                $width = (float) ($objects->number($entries[$i + 2] ?? 0) ?? 0);
+                $last = (int) $objects->number($next, $first);
+                $width = $objects->number($entries[$i + 2] ?? 0);
                 for ($cid = $first; $cid <= min($last, $first + 65535); $cid++) {
                     $widths[$cid] = $width;
                 }
@@ -341,7 +338,7 @@ final class FontMapper {
             }
         }
 
-        return [$widths, (float) ($objects->number($font['DW'] ?? 1000) ?? 1000)];
+        return [$widths, $objects->number($font['DW'] ?? 1000, 1000)];
     }
 
     /**

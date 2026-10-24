@@ -14,11 +14,9 @@ final class RenderOptions {
     public const TEXT_EMBEDDED = 'embedded';       // embedded font programs by glyph id, substitutes for the others
     public const TEXT_SUBSTITUTE = 'substitute';   // system fonts only, stretched to the PDF widths
     public const TEXT_SKIP = 'skip';
-
     public const IMAGES_FULL = 'full';
     public const IMAGES_BOX = 'box';               // a grey box where the image is, nothing decoded
     public const IMAGES_SKIP = 'skip';
-
     public const SHADINGS_BANDS = 'bands';         // axial/radial shadings as bands of colour
     public const SHADINGS_FLAT = 'flat';           // one colour
     public const SHADINGS_SKIP = 'skip';

@@ -15,7 +15,6 @@ namespace PrinsFrank\PdfParser\Render;
  */
 final class OpenType {
     public const GLYPH_BASE = 0xF0000;
-
     public const GLYPH_CAPACITY = 0xFFFFD - 0xF0000 + 1;
 
     /** The text that draws $gids with a font whose cmap comes from self::cmap() */
@@ -58,7 +57,7 @@ final class OpenType {
      */
     public static function cffTables(string $cff, int $unitsPerEm, array $advances, array $bbox, string $name): array {
         $glyphCount = count($advances);
-        [$xMin, $yMin, $xMax, $yMax] = array_map(static fn (int $v): int => max(-32768, min(32767, $v)), $bbox);
+        [$xMin, $yMin, $xMax, $yMax] = array_map(static fn(int $v): int => max(-32768, min(32767, $v)), $bbox);
         $head = pack('NNNNnn', 0x00010000, 0x00010000, 0, 0x5F0F3CF5, 0x000B, $unitsPerEm)
             . str_repeat("\0", 16)
             . pack('nnnn', $xMin & 0xFFFF, $yMin & 0xFFFF, $xMax & 0xFFFF, $yMax & 0xFFFF)

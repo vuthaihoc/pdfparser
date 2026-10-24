@@ -12,9 +12,7 @@ namespace PrinsFrank\PdfParser\Render;
 final class TrueTypeFont {
     /** @var array<string, array{offset: int, length: int}> */
     private array $tables = [];
-
     public readonly int $glyphCount;
-
     public readonly int $unitsPerEm;
 
     /** @var list<int> */

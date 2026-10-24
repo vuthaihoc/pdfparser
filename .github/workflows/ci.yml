@@ -53,6 +53,38 @@ jobs:
       - name: Run Feature tests
         run: composer run feature
 
+  render:
+    name: PHP Tests - Render
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        php-version: ["8.3", "8.5"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install fonts for substitute text
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-liberation fontconfig
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: ${{ matrix.php-version }}
+          extensions: imagick
+          coverage: none
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
+
+      - name: Run renderer tests
+        run: |
+          php -r 'exit(extension_loaded("imagick") ? 0 : 1);'
+          vendor/bin/phpunit --fail-on-skipped tests/Unit/Render tests/Feature/Render
+
   samples:
     name: PHP Tests - Samples
     runs-on: ubuntu-latest

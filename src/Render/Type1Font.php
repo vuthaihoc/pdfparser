@@ -14,7 +14,6 @@ namespace PrinsFrank\PdfParser\Render;
  */
 final class Type1Font {
     private const EEXEC_KEY = 55665;
-
     private const CHARSTRING_KEY = 4330;
 
     /** @var array<string, int> glyph name => gid */
@@ -25,24 +24,18 @@ final class Type1Font {
 
     /** @var array<int, string> code => glyph name */
     private array $encoding = [];
-
     public readonly float $unitsPerEm;
-
     private string $before = '';
-
     private string $after = '';
-
     private string $rd = 'RD';
-
     private string $nd = 'ND';
-
     private int $lenIV = 4;
 
     private function __construct(
         private readonly string $clearText,
         string $private,
     ) {
-        if (preg_match('/\/FontMatrix\s*\[\s*([-+0-9.eE]+)/', $clearText, $m) === 1 && (float) $m[1] != 0.0) {
+        if (preg_match('/\/FontMatrix\s*\[\s*([-+0-9.eE]+)/', $clearText, $m) === 1 && (float) $m[1] !== 0.0) {
             $this->unitsPerEm = 1 / abs((float) $m[1]);
         } else {
             $this->unitsPerEm = 1000;
@@ -141,7 +134,7 @@ final class Type1Font {
      */
     public function rebuilt(array $advances = []): string {
         $entries = '';
-        foreach ($this->glyphs as $gid => $glyph) {
+        foreach ($this->glyphs as $glyph) {
             $entries .= $this->entry($glyph['name'], $glyph['data']);
         }
 

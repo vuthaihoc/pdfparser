@@ -46,35 +46,23 @@ final class PageRenderer {
         'Difference' => Imagick::COMPOSITE_DIFFERENCE, 'Exclusion' => Imagick::COMPOSITE_EXCLUSION, 'Hue' => Imagick::COMPOSITE_HUE,
         'Saturation' => Imagick::COMPOSITE_SATURATE, 'Color' => Imagick::COMPOSITE_COLORIZE, 'Luminosity' => Imagick::COMPOSITE_LUMINIZE,
     ];
-
     private readonly RawObjects $objects;
-
     private readonly ColorResolver $colors;
-
     private readonly ImageDecoder $images;
-
     private readonly FontMapper $fonts;
-
     private Imagick $canvas;
-
     private ImagickDraw $draw;
-
     private int $pending = 0;
-
     private Fidelity $fidelity;
 
-    /** @var array<string, int> */
+    /** @var array<string, mixed> */
     private array $stats = [];
 
     /** @var list<float> page space → canvas */
     private array $base = [1, 0, 0, 1, 0, 0];
-
     private float $canvasWidth = 0;
-
     private float $canvasHeight = 0;
-
     private int $clipCounter = 0;
-
     private ?string $activeClip = null;
 
     /** @var list<int> form object numbers being drawn */
@@ -82,7 +70,6 @@ final class PageRenderer {
 
     /** @var array<int, ?Font> */
     private array $fontCache = [];
-
     private ?ColorState $colorState = null;
 
     public function __construct(
@@ -159,7 +146,7 @@ final class PageRenderer {
         try {
             $this->enter('parse');
             try {
-                $content = $page->getContentStream()?->content ?? [];
+                $content = $page->getContentStream()->content ?? [];
             } finally {
                 $this->leave();
             }
@@ -186,7 +173,7 @@ final class PageRenderer {
         $image->setImageFormat('png');
         $this->leave();
         $this->leave();
-        $timings = array_map(static fn (int $ns): float => round($ns / 1e9, 4), $this->stageTime);
+        $timings = array_map(static fn(int $ns): float => round($ns / 1e9, 4), $this->stageTime);
         arsort($timings);
         $memory = [
             'php_peak_mb' => round(memory_get_peak_usage() / 1048576, 1),
@@ -232,7 +219,7 @@ final class PageRenderer {
             foreach ($frontier as $objectNumber) {
                 $value = $this->objects->value($objectNumber);
                 $items = is_array($value) && array_is_list($value) ? $value : array_intersect_key(is_array($value) ? $value : [], array_flip(['DescendantFonts', 'FontDescriptor', 'ToUnicode', 'Encoding', 'Widths', 'W']));
-                foreach (self::references(array_map(fn ($item) => is_array($item) && array_is_list($item) ? null : $item, $items)) as $reference) {
+                foreach (self::references(array_map(fn($item) => is_array($item) && array_is_list($item) ? null : $item, $items)) as $reference) {
                     $found[$reference] = true;
                 }
 
@@ -282,12 +269,10 @@ final class PageRenderer {
 
     /** @var list<string> */
     private array $stages = [];
-
     private int $stageMark = 0;
 
     /** @var array<string, int> stage => nanoseconds spent in it, not counting the stages entered from it */
     private array $stageTime = [];
-
     private int $imagickPeak = 0;
 
     /**
@@ -324,7 +309,7 @@ final class PageRenderer {
         foreach (['CropBox', 'MediaBox'] as $key) {
             $box = $this->objects->array($this->objects->inherited($pageNumber, $key));
             if ($box !== null && count($box) === 4) {
-                $values = array_map(fn ($v) => $this->objects->number($v), $box);
+                $values = array_map(fn($v) => $this->objects->number($v), $box);
 
                 return [min($values[0], $values[2]), min($values[1], $values[3]), max($values[0], $values[2]), max($values[1], $values[3])];
             }
@@ -368,13 +353,13 @@ final class PageRenderer {
                 foreach ($item->contentStreamCommands as $command) {
                     $this->stats['commands']++;
                     $operator = $command->operator;
-                    if ($operator instanceof ProducesPositionedTextElements || $operator instanceof InteractsWithTextState || ($operator instanceof InteractsWithTransformationMatrix && !$operator instanceof GraphicsStateOperator)) {
+                    if ($operator instanceof ProducesPositionedTextElements || $operator instanceof InteractsWithTextState || $operator instanceof InteractsWithTransformationMatrix) {
                         try {
                             if ($operator instanceof InteractsWithTextState) {
                                 $state['textState'] = $operator->applyToTextState($command->operands, $state['textState']);
                             }
 
-                            if ($operator instanceof InteractsWithTransformationMatrix && !$operator instanceof GraphicsStateOperator) {
+                            if ($operator instanceof InteractsWithTransformationMatrix) {
                                 $moved = $operator->applyToTransformationMatrix($command->operands, $lineMatrix, $state['textState']);
                                 if (!$operator instanceof ProducesPositionedTextElements || $moved !== $lineMatrix) {
                                     $lineMatrix = $textMatrix = $moved;
@@ -384,7 +369,7 @@ final class PageRenderer {
                             if ($operator instanceof ProducesPositionedTextElements && $state['textState']->fontName !== null) {
                                 $element = $operator->getPositionedTextElement($command->operands, $textMatrix, self::libMatrix($state['ctm']), $state['textState'], $this->colorState ??= new ColorState()); // colours come from $state
                                 $advance = $this->text($element, $state);
-                                if ($advance != 0.0) {
+                                if ($advance !== 0.0) {
                                     $textMatrix = (new TransformationMatrix(1, 0, 0, 1, $advance, 0))->multiplyWith($textMatrix);
                                 }
                             }
@@ -417,7 +402,7 @@ final class PageRenderer {
         $numbers = static function () use ($operands): array {
             $values = PdfSyntax::values($operands);
 
-            return array_values(array_map(static fn ($v) => is_int($v) || is_float($v) ? (float) $v : 0.0, array_filter($values, static fn ($v) => is_int($v) || is_float($v))));
+            return array_values(array_map(static fn(int|float $v) => (float) $v, array_filter($values, static fn($v) => is_int($v) || is_float($v))));
         };
         switch (true) {
             case $operator === GraphicsStateOperator::SaveCurrentStateToStack:
@@ -462,7 +447,7 @@ final class PageRenderer {
                 break;
             case $operator === PathPaintingOperator::PAINT_SHADING:
                 $this->flushIfManyPending();
-                $this->shadingByName(ltrim(trim($operands), '/'), $state, null);
+                $this->shadingByName(ltrim(trim($operands), '/'), $state);
                 break;
             case $operator instanceof PathPaintingOperator:
                 $this->paint($operator, $state, $path);
@@ -489,6 +474,7 @@ final class PageRenderer {
 
     // ---------------------------------------------------------------- state
 
+    /** @param array<string, mixed> $state */
     private function extGState(string $name, array &$state): void {
         $gs = $this->objects->dictionary($this->objects->dictionary($state['resources']['ExtGState'] ?? null)[$name] ?? null);
         if ($gs === null) {
@@ -498,12 +484,18 @@ final class PageRenderer {
         foreach ($gs as $key => $value) {
             $value = $this->objects->resolve($value);
             switch ($key) {
-                case 'LW': $state['lw'] = $this->objects->number($value, 1); break;
-                case 'LC': $state['cap'] = (int) $this->objects->number($value); break;
-                case 'LJ': $state['join'] = (int) $this->objects->number($value); break;
-                case 'ca': $state['fa'] = $this->objects->number($value, 1); break;
-                case 'CA': $state['sa'] = $this->objects->number($value, 1); break;
-                case 'SMask': $state['softMask'] = !($value === '/None' || $value === null); break;
+                case 'LW': $state['lw'] = $this->objects->number($value, 1);
+                    break;
+                case 'LC': $state['cap'] = (int) $this->objects->number($value);
+                    break;
+                case 'LJ': $state['join'] = (int) $this->objects->number($value);
+                    break;
+                case 'ca': $state['fa'] = $this->objects->number($value, 1);
+                    break;
+                case 'CA': $state['sa'] = $this->objects->number($value, 1);
+                    break;
+                case 'SMask': $state['softMask'] = !($value === '/None' || $value === null);
+                    break;
                 case 'BM':
                     $mode = is_array($value) ? ($value[0] ?? '/Normal') : $value;
                     $state['bm'] = is_string($mode) ? ltrim($mode, '/') : 'Normal';
@@ -511,7 +503,7 @@ final class PageRenderer {
                     break;
                 case 'D':
                     if (is_array($value) && isset($value[0]) && is_array($value[0])) {
-                        $state['dash'] = [array_map(fn ($v) => $this->objects->number($v), $value[0]), $this->objects->number($value[1] ?? 0)];
+                        $state['dash'] = [array_map(fn($v) => $this->objects->number($v), $value[0]), $this->objects->number($value[1] ?? 0)];
                     }
 
                     break;
@@ -519,9 +511,10 @@ final class PageRenderer {
         }
     }
 
+    /** @param array<string, mixed> $state */
     private function color(ColorOperator $operator, string $operands, array &$state): void {
         $values = PdfSyntax::values($operands);
-        $numbers = array_values(array_map('floatval', array_filter($values, static fn ($v) => is_int($v) || is_float($v))));
+        $numbers = array_values(array_map('floatval', array_filter($values, static fn($v) => is_int($v) || is_float($v))));
         $stroke = in_array($operator, [ColorOperator::SetName, ColorOperator::SetStrokingColor, ColorOperator::SetStrokingParams, ColorOperator::SetStrokingColorSpace, ColorOperator::SetStrokingColorDeviceRGB, ColorOperator::SetStrokingColorDeviceCMYK], true);
         $csKey = $stroke ? 'strokeCs' : 'fillCs';
         $colorKey = $stroke ? 'stroke' : 'fill';
@@ -626,6 +619,11 @@ final class PageRenderer {
         return $w > 0 && $h > 0 ? $w * $h : 0.0;
     }
 
+    /**
+     * @param list<float> $n
+     * @param array<string, mixed> $state
+     * @param array<string, mixed> $path
+     */
     private function pathCommand(PathConstructionOperator $operator, array $n, array $state, array &$path): void {
         $m = $this->device($state);
         $add = function (string $type, array $points) use (&$path, $m): void {
@@ -763,7 +761,7 @@ final class PageRenderer {
             $this->draw->setStrokeLineCap([Imagick::LINECAP_BUTT, Imagick::LINECAP_ROUND, Imagick::LINECAP_SQUARE][$state['cap']] ?? Imagick::LINECAP_BUTT);
             $this->draw->setStrokeLineJoin([Imagick::LINEJOIN_MITER, Imagick::LINEJOIN_ROUND, Imagick::LINEJOIN_BEVEL][$state['join']] ?? Imagick::LINEJOIN_MITER);
             if ($state['dash'][0] !== [] && array_sum($state['dash'][0]) > 0) {
-                $this->draw->setStrokeDashArray(array_map(static fn ($d) => max(0.5, $d * $scale), $state['dash'][0]));
+                $this->draw->setStrokeDashArray(array_map(static fn($d) => max(0.5, $d * $scale), $state['dash'][0]));
                 $this->draw->setStrokeDashOffset($state['dash'][1] * $scale);
             }
         } else {
@@ -788,6 +786,10 @@ final class PageRenderer {
 
     // ---------------------------------------------------------------- clipping
 
+    /**
+     * @param array<string, mixed> $state
+     * @param array<string, mixed> $path
+     */
     private function setClip(array &$state, array $path, bool $evenOdd): void {
         if ($path['cmds'] === []) {
             return;
@@ -803,7 +805,7 @@ final class PageRenderer {
                 }
             } elseif ($rect === null && $current['rect'] !== null && self::inside($path['bbox'], $current['rect'])) {
                 // new clip lies inside the current rectangle: the new one alone is exact
-            } elseif ($rect !== null && $current['rect'] === null && self::inside($current['bbox'], $rect)) {
+            } elseif ($rect !== null && self::inside($current['bbox'], $rect)) {
                 $state['clip']['bbox'] = $current['bbox'];
 
                 return; // the current clip already lies inside the new rectangle
@@ -854,8 +856,8 @@ final class PageRenderer {
             return null;
         }
 
-        $xs = array_unique(array_map(static fn ($p) => round($p[0], 2), $points));
-        $ys = array_unique(array_map(static fn ($p) => round($p[1], 2), $points));
+        $xs = array_unique(array_map(static fn($p) => round($p[0], 2), $points));
+        $ys = array_unique(array_map(static fn($p) => round($p[1], 2), $points));
         if (count($xs) !== 2 || count($ys) !== 2) {
             return null;
         }
@@ -1056,13 +1058,13 @@ final class PageRenderer {
         $yLength = sqrt($m[2] ** 2 + $m[3] ** 2);
         $size = abs($fontSize) * $yLength;
         if ($font === null) {
-            $this->missingText($m, $size, 0.5 * $size * array_sum(array_map(static fn ($segment) => strlen($segment->textString->getBinaryString()), $element->textSegments)), $state);
+            $this->missingText($m, $size, 0.5 * $size * array_sum(array_map(static fn($segment) => strlen($segment->textString->getBinaryString()), $element->textSegments)));
 
             return 0.0;
         }
 
         $composite = $this->composite[$font->objectNumber] ??= $font->getDescendantFonts() !== [];
-        $width = static fn (array $codes): float => $codes === [] ? 0.0 : $font->getWidthForChars($codes, $textState->wordSpace, $textState->charSpace, $fontSize, 1) * $th;
+        $width = static fn(array $codes): float => $codes === [] ? 0.0 : $font->getWidthForChars($codes, $textState->wordSpace, $textState->charSpace, $fontSize, 1) * $th;
         $runs = [];
         $current = null;
         $tx = $lastShift = 0.0;
@@ -1081,7 +1083,7 @@ final class PageRenderer {
             $current['segments'][] = $segment;
             $tx += $width($codes);
             $lastShift = 0.0;
-            if ($segment->offset !== null && $segment->offset != 0) {
+            if ($segment->offset !== null && $segment->offset !== 0) {
                 $shift = -$segment->offset / 1000 * $fontSize * $th;
                 $tx += $shift;
                 if (abs($segment->offset) >= $this->options->textSplitThreshold) {
@@ -1131,7 +1133,7 @@ final class PageRenderer {
         $kerning = $textState->charSpace * $yLength;
         // ImageMagick draws a space with the interword spacing instead of its advance when that is not 0
         $wordSpace = $composite ? 0.0 : $textState->wordSpace * $yLength;
-        $interword = $wordSpace != 0.0 ? $font->getWidthForChars([32], 0, 0, 1, 1) * $size + $wordSpace : 0.0;
+        $interword = $wordSpace !== 0.0 ? $font->getWidthForChars([32], 0, 0, 1, 1) * $size + $wordSpace : 0.0;
         foreach ($runs as $run) {
             if (count($run['codes']) <= 4 && $this->blank($font, $run['segments'])) {
                 // spaces in a font of their own (Word: no-break spaces in a Type0 font between the words) draw nothing
@@ -1187,7 +1189,7 @@ final class PageRenderer {
             $target = ($runWidth + $run['extra']) * $xLength;
             if (trim($text) === '' || !mb_check_encoding($text, 'UTF-8')) {
                 if ($text === '' || !mb_check_encoding($text, 'UTF-8')) {
-                    $this->missingText(self::translateText($m, $run['tx'], $rise), $size, $target, $state);
+                    $this->missingText(self::translateText($m, $run['tx'], $rise), $size, $target);
                 }
 
                 continue;
@@ -1203,8 +1205,8 @@ final class PageRenderer {
                 $this->leave();
             }
 
-            $substituteInterword = $wordSpace != 0.0 && $spaces > 0 ? $spaceWidth + $wordSpace : 0.0;
-            $natural = $textWidth + $kerning * (mb_strlen($text) - 1) + ($substituteInterword != 0.0 ? $wordSpace * $spaces : 0.0);
+            $substituteInterword = $wordSpace !== 0.0 && $spaces > 0 ? $spaceWidth + $wordSpace : 0.0;
+            $natural = $textWidth + $kerning * (mb_strlen($text) - 1) + ($substituteInterword !== 0.0 ? $wordSpace * $spaces : 0.0);
             $runStretch = $natural > 0 && $target > 0 ? max(0.3, min(3.0, $target / $natural)) : $stretch;
             $this->drawRun($file, $text, $m, $run['tx'], $rise, $size, $runStretch, $kerning, $substituteInterword, $target, $angle, $state, $this->isType3($font) ? 'type3_text' : 'text_substitute');
             $this->stats['texts_substitute'] = ($this->stats['texts_substitute'] ?? 0) + 1;
@@ -1243,7 +1245,7 @@ final class PageRenderer {
     private function drawRun(string $file, string $text, array $m, float $tx, float $rise, float $size, float $stretch, float $kerning, float $interword, float $width, float $angle, array $state, string $issue): void {
         $origin = self::translateText($m, $tx, $rise);
         $bbox = [$origin[4] - 1, $origin[5] - $size, $origin[4] + $width + 1, $origin[5] + 0.3 * $size];
-        if ($angle != 0.0) {
+        if ($angle !== 0.0) {
             $reach = abs($width) + $size;
             $bbox = [$origin[4] - $reach, $origin[5] - $reach, $origin[4] + $reach, $origin[5] + $reach];
         }
@@ -1291,16 +1293,16 @@ final class PageRenderer {
                 $this->draw->setFontSize($size);
                 $this->draw->setStrokeColor('none');
                 $this->draw->setFillColor($colour);
-                if ($kerning != 0.0) {
+                if ($kerning !== 0.0) {
                     $this->draw->setTextKerning($kerning);
                 }
 
-                if ($interword != 0.0) {
+                if ($interword !== 0.0) {
                     $this->draw->setTextInterwordSpacing($interword);
                 }
 
                 $this->draw->translate($x, $y);
-                if ($angle != 0.0) {
+                if ($angle !== 0.0) {
                     $this->draw->rotate($angle);
                 }
 
@@ -1320,9 +1322,8 @@ final class PageRenderer {
      * Text that is not drawn (no font, no glyphs and no Unicode text): its area counts as missing
      *
      * @param list<float> $m
-     * @param array<string, mixed> $state
      */
-    private function missingText(array $m, float $size, float $width, array $state): void {
+    private function missingText(array $m, float $size, float $width): void {
         $this->stats['texts_missing'] = ($this->stats['texts_missing'] ?? 0) + 1;
         $this->fidelity->add('text_missing', $this->area([$m[4], $m[5] - $size, $m[4] + abs($width), $m[5] + 0.3 * $size]));
     }
@@ -1349,6 +1350,7 @@ final class PageRenderer {
 
     // ---------------------------------------------------------------- images
 
+    /** @param array<string, mixed> $state */
     private function xobject(string $name, array &$state, int $depth): void {
         $reference = $this->objects->dictionary($state['resources']['XObject'] ?? null)[$name] ?? null;
         if (!$reference instanceof PdfReference) {
@@ -1359,7 +1361,7 @@ final class PageRenderer {
         $subtype = $this->objects->name($dictionary['Subtype'] ?? null);
         if ($subtype === 'Image') {
             $this->stats['images']++;
-            $this->placeImage($state, fn (int $target, array $fill) => $this->images->xobject($reference->objectNumber, $state['resources'], $fill, $target));
+            $this->placeImage($state, fn(int $target, array $fill) => $this->images->xobject($reference->objectNumber, $state['resources'], $fill, $target));
         } elseif ($subtype === 'Form') {
             $this->form($reference->objectNumber, $dictionary, $state, $depth, null);
         }
@@ -1367,7 +1369,7 @@ final class PageRenderer {
 
     private function inlineImage(string $operands, array $state): void {
         $this->stats['inline_images']++;
-        $this->placeImage($state, fn (int $target, array $fill) => $this->images->inline($operands, $state['resources'], $fill, $target));
+        $this->placeImage($state, fn(int $target, array $fill) => $this->images->inline($operands, $state['resources'], $fill, $target));
     }
 
     /** @param callable(int, array): array{image: ?Imagick, reason: ?string, approximate: ?string, masksSkipped?: bool} $decode */
@@ -1400,7 +1402,7 @@ final class PageRenderer {
             $this->draw->push();
             $this->draw->setStrokeColor('none');
             $this->draw->setFillColor('#d6d6d6');
-            $this->draw->polygon(array_map(static fn (array $p) => ['x' => $p[0], 'y' => $p[1]], [$topLeft, $topRight, $bottomRight, $bottomLeft]));
+            $this->draw->polygon(array_map(static fn(array $p) => ['x' => $p[0], 'y' => $p[1]], [$topLeft, $topRight, $bottomRight, $bottomLeft]));
             $this->draw->pop();
             $this->pending++;
             $this->flushIfManyPending();
@@ -1548,8 +1550,8 @@ final class PageRenderer {
 
     /** @param ?array $ctm a matrix to use instead of form Matrix × CTM (annotations) */
     private function form(int $objectNumber, array $dictionary, array $state, int $depth, ?array $ctm): void {
-        $bboxValues = array_map(fn ($v) => $this->objects->number($v), $this->objects->array($dictionary['BBox'] ?? null) ?? []);
-        $matrix = array_map(fn ($v) => $this->objects->number($v), $this->objects->array($dictionary['Matrix'] ?? null) ?? [1, 0, 0, 1, 0, 0]);
+        $bboxValues = array_map(fn($v) => $this->objects->number($v), $this->objects->array($dictionary['BBox'] ?? null) ?? []);
+        $matrix = array_map(fn($v) => $this->objects->number($v), $this->objects->array($dictionary['Matrix'] ?? null) ?? [1, 0, 0, 1, 0, 0]);
         $state['ctm'] = $ctm ?? self::multiply(count($matrix) === 6 ? $matrix : [1, 0, 0, 1, 0, 0], $state['ctm']);
         if ($depth > 12 || in_array($objectNumber, $this->formStack, true)) {
             if (count($bboxValues) === 4) {
@@ -1615,7 +1617,7 @@ final class PageRenderer {
 
     // ---------------------------------------------------------------- shadings and patterns
 
-    private function shadingByName(string $name, array $state, ?array $patternMatrix): void {
+    private function shadingByName(string $name, array $state): void {
         $shading = $this->objects->dictionary($state['resources']['Shading'] ?? null)[$name] ?? null;
         $this->shading($shading, $state, $state['clip']['bbox'] ?? [0, 0, $this->canvasWidth, $this->canvasHeight]);
     }
@@ -1647,20 +1649,19 @@ final class PageRenderer {
         $this->stats['shading_types'][$type] = ($this->stats['shading_types'][$type] ?? 0) + 1;
         $cs = $this->colors->colorSpace($shading['ColorSpace'] ?? '/DeviceRGB', $state['resources']);
         $function = PdfFunction::from($this->objects, $shading['Function'] ?? null);
-        $domain = array_map(fn ($v) => $this->objects->number($v), $this->objects->array($shading['Domain'] ?? null) ?? [0, 1]);
+        $domain = array_map(fn($v) => $this->objects->number($v), $this->objects->array($shading['Domain'] ?? null) ?? [0, 1]);
         $colorAt = function (float $t) use ($cs, $function): array {
             $components = $function !== null && $function !== [] ? PdfFunction::evaluate($function, [$t]) : [$t];
 
             return $this->colors->toRgb($cs, $components);
         };
         $area = $this->area($region);
-        $coords = array_map(fn ($v) => $this->objects->number($v), $this->objects->array($shading['Coords'] ?? null) ?? []);
+        $coords = array_map(fn($v) => $this->objects->number($v), $this->objects->array($shading['Coords'] ?? null) ?? []);
         $m = $this->device($state);
         $this->useClip($state, null);
         $this->emitText();
         $this->draw->push();
         $this->draw->setStrokeColor('none');
-        $drawn = false;
         $bands = max(2, $this->options->shadingBands);
         $flat = $this->options->shadings === RenderOptions::SHADINGS_FLAT;
         if (!$flat && $type === 2 && count($coords) === 4 && $function !== null) {
@@ -1704,20 +1705,16 @@ final class PageRenderer {
             }
         }
 
-        if (!$drawn) {
-            $background = $this->objects->array($shading['Background'] ?? null);
-            $rgb = $background !== null ? $this->colors->toRgb($cs, array_map(fn ($v) => $this->objects->number($v), $background)) : $colorAt(($domain[0] + ($domain[1] ?? 1)) / 2);
-            $this->draw->setFillColor(self::css($rgb, $state['fa']));
-            $this->draw->rectangle($region[0], $region[1], $region[2], $region[3]);
-            $this->fidelity->add('shading_flat', $area);
-        } else {
-            $this->fidelity->add('shading_gradient', $area * 0.4);
-        }
-
+        // a shading type not drawn above, or flat shadings: one colour
+        $background = $this->objects->array($shading['Background'] ?? null);
+        $rgb = $background !== null ? $this->colors->toRgb($cs, array_map(fn($v) => $this->objects->number($v), $background)) : $colorAt(($domain[0] + ($domain[1] ?? 1)) / 2);
+        $this->draw->setFillColor(self::css($rgb, $state['fa']));
+        $this->draw->rectangle($region[0], $region[1], $region[2], $region[3]);
+        $this->fidelity->add('shading_flat', $area);
         $this->draw->pop();
         $this->pending++;
 
-        return $drawn;
+        return false;
     }
 
     /**
@@ -1741,7 +1738,7 @@ final class PageRenderer {
         $previous = null;
         for ($row = 0; $row < $height; $row++) {
             $t0 = (($left + 0.5 - $x0) * $dx + ($top + $row + 0.5 - $y0) * $dy) / $length2;
-            if ($previous !== null && $dy == 0.0) {
+            if ($previous !== null && $dy === 0.0) {
                 $pixels .= $previous;
                 continue;
             }
@@ -1863,7 +1860,7 @@ final class PageRenderer {
             return false;
         }
 
-        $matrix = array_map(fn ($v) => $this->objects->number($v), $this->objects->array($pattern['Matrix'] ?? null) ?? [1, 0, 0, 1, 0, 0]);
+        $matrix = array_map(fn($v) => $this->objects->number($v), $this->objects->array($pattern['Matrix'] ?? null) ?? [1, 0, 0, 1, 0, 0]);
         $patternState = $state;
         $patternState['ctm'] = count($matrix) === 6 ? $matrix : [1, 0, 0, 1, 0, 0];
         $patternState['clip'] = $state['clip'];
@@ -1908,7 +1905,7 @@ final class PageRenderer {
                 continue;
             }
 
-            $rect = array_map(fn ($v) => $this->objects->number($v), $this->objects->array($annotation['Rect'] ?? null) ?? []);
+            $rect = array_map(fn($v) => $this->objects->number($v), $this->objects->array($annotation['Rect'] ?? null) ?? []);
             $appearance = $this->objects->dictionary($annotation['AP'] ?? null)['N'] ?? null;
             if (count($rect) !== 4 || $appearance === null) {
                 continue;
@@ -1925,12 +1922,12 @@ final class PageRenderer {
             }
 
             $form = $this->objects->dictionary($this->objects->value($appearance->objectNumber)) ?? [];
-            $box = array_map(fn ($v) => $this->objects->number($v), $this->objects->array($form['BBox'] ?? null) ?? []);
+            $box = array_map(fn($v) => $this->objects->number($v), $this->objects->array($form['BBox'] ?? null) ?? []);
             if (count($box) !== 4) {
                 continue;
             }
 
-            $matrix = array_map(fn ($v) => $this->objects->number($v), $this->objects->array($form['Matrix'] ?? null) ?? [1, 0, 0, 1, 0, 0]);
+            $matrix = array_map(fn($v) => $this->objects->number($v), $this->objects->array($form['Matrix'] ?? null) ?? [1, 0, 0, 1, 0, 0]);
             $transformed = null;
             foreach ([[$box[0], $box[1]], [$box[2], $box[1]], [$box[0], $box[3]], [$box[2], $box[3]]] as [$x, $y]) {
                 [$tx, $ty] = self::apply($matrix, $x, $y);

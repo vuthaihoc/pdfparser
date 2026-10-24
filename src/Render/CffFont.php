@@ -11,11 +11,8 @@ namespace PrinsFrank\PdfParser\Render;
  */
 final class CffFont {
     public readonly int $glyphCount;
-
     public readonly bool $cidKeyed;
-
     public readonly int $unitsPerEm;
-
     public readonly string $name;
 
     /** @var array{int, int, int, int} */
@@ -36,7 +33,7 @@ final class CffFont {
         $position = ord($data[2]);
         [$names, $position] = $this->index($position);
         [$topDicts, $position] = $this->index($position);
-        [$strings, $position] = $this->index($position);
+        [$strings] = $this->index($position);
         $this->name = $names[0] ?? '';
         $top = $this->dict($topDicts[0] ?? '');
         $this->cidKeyed = isset($top[1230]);
@@ -49,10 +46,10 @@ final class CffFont {
         }
 
         $this->unitsPerEm = $matrix !== null && abs($matrix[0]) > 1e-6 ? max(16, min(16384, (int) round(1 / abs($matrix[0])))) : 1000;
-        $box = array_map(static fn (float $v): int => (int) round($v), $top[5] ?? [0, -200, 1000, 900]);
+        $box = array_map(static fn(float $v): int => (int) round($v), $top[5] ?? [0, -200, 1000, 900]);
         $this->bbox = count($box) === 4 ? [$box[0], $box[1], $box[2], $box[3]] : [0, -200, 1000, 900];
 
-        $string = static fn (int $sid): string => $sid < count(CffStandard::STRINGS) ? CffStandard::STRINGS[$sid] : ($strings[$sid - count(CffStandard::STRINGS)] ?? '');
+        $string = static fn(int $sid): string => $sid < count(CffStandard::STRINGS) ? CffStandard::STRINGS[$sid] : ($strings[$sid - count(CffStandard::STRINGS)] ?? '');
         $charset = $this->charset((int) ($top[15][0] ?? 0));
         foreach ($charset as $gid => $id) {
             if ($this->cidKeyed) {

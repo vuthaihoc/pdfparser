@@ -69,7 +69,9 @@ final class ColorResolver {
                 $streamDictionary = $this->objects->dictionary($value[1] ?? null) ?? [];
                 $n = (int) $this->objects->number($streamDictionary['N'] ?? 3, 3);
 
-                return match ($n) { 1 => ['family' => 'Gray', 'n' => 1], 4 => ['family' => 'CMYK', 'n' => 4], default => ['family' => 'RGB', 'n' => 3] };
+                return match ($n) {
+                    1 => ['family' => 'Gray', 'n' => 1], 4 => ['family' => 'CMYK', 'n' => 4], default => ['family' => 'RGB', 'n' => 3]
+                };
             case 'CalGray': case 'DeviceGray': case 'G':
                 return ['family' => 'Gray', 'n' => 1];
             case 'CalRGB': case 'DeviceRGB': case 'RGB':
@@ -125,7 +127,7 @@ final class ColorResolver {
      * @return array{0: float, 1: float, 2: float}
      */
     public function toRgb(array $colorSpace, array $components, int $depth = 0): array {
-        $c = static fn (int $i, float $default = 0.0): float => max(0.0, min(1.0, (float) ($components[$i] ?? $default)));
+        $c = static fn(int $i, float $default = 0.0): float => max(0.0, min(1.0, (float) ($components[$i] ?? $default)));
         switch ($colorSpace['family']) {
             case 'Gray':
                 return [$c(0), $c(0), $c(0)];
@@ -182,21 +184,52 @@ final class ColorResolver {
     public static function cmykToRgb(float $c, float $m, float $y, float $k): array {
         [$c1, $m1, $y1, $k1] = [1 - $c, 1 - $m, 1 - $y, 1 - $k];
         $r = $g = $b = 0.0;
-        $x = $c1 * $m1 * $y1 * $k1; $r += $x; $g += $x; $b += $x;
-        $x = $c1 * $m1 * $y1 * $k; $r += 0.1373 * $x; $g += 0.1216 * $x; $b += 0.1255 * $x;
-        $x = $c1 * $m1 * $y * $k1; $r += $x; $g += 0.9490 * $x;
-        $x = $c1 * $m1 * $y * $k; $r += 0.1098 * $x; $g += 0.1020 * $x;
-        $x = $c1 * $m * $y1 * $k1; $r += 0.9255 * $x; $b += 0.5490 * $x;
-        $x = $c1 * $m * $y1 * $k; $r += 0.1412 * $x;
-        $x = $c1 * $m * $y * $k1; $r += 0.9294 * $x; $g += 0.1098 * $x; $b += 0.1412 * $x;
-        $x = $c1 * $m * $y * $k; $r += 0.1333 * $x;
-        $x = $c * $m1 * $y1 * $k1; $g += 0.6784 * $x; $b += 0.9373 * $x;
-        $x = $c * $m1 * $y1 * $k; $g += 0.0588 * $x; $b += 0.1412 * $x;
-        $x = $c * $m1 * $y * $k1; $g += 0.6510 * $x; $b += 0.3137 * $x;
-        $x = $c * $m1 * $y * $k; $g += 0.0745 * $x;
-        $x = $c * $m * $y1 * $k1; $r += 0.1804 * $x; $g += 0.1922 * $x; $b += 0.5725 * $x;
-        $x = $c * $m * $y1 * $k; $b += 0.0078 * $x;
-        $x = $c * $m * $y * $k1; $r += 0.2118 * $x; $g += 0.2119 * $x; $b += 0.2235 * $x;
+        $x = $c1 * $m1 * $y1 * $k1;
+        $r += $x;
+        $g += $x;
+        $b += $x;
+        $x = $c1 * $m1 * $y1 * $k;
+        $r += 0.1373 * $x;
+        $g += 0.1216 * $x;
+        $b += 0.1255 * $x;
+        $x = $c1 * $m1 * $y * $k1;
+        $r += $x;
+        $g += 0.9490 * $x;
+        $x = $c1 * $m1 * $y * $k;
+        $r += 0.1098 * $x;
+        $g += 0.1020 * $x;
+        $x = $c1 * $m * $y1 * $k1;
+        $r += 0.9255 * $x;
+        $b += 0.5490 * $x;
+        $x = $c1 * $m * $y1 * $k;
+        $r += 0.1412 * $x;
+        $x = $c1 * $m * $y * $k1;
+        $r += 0.9294 * $x;
+        $g += 0.1098 * $x;
+        $b += 0.1412 * $x;
+        $x = $c1 * $m * $y * $k;
+        $r += 0.1333 * $x;
+        $x = $c * $m1 * $y1 * $k1;
+        $g += 0.6784 * $x;
+        $b += 0.9373 * $x;
+        $x = $c * $m1 * $y1 * $k;
+        $g += 0.0588 * $x;
+        $b += 0.1412 * $x;
+        $x = $c * $m1 * $y * $k1;
+        $g += 0.6510 * $x;
+        $b += 0.3137 * $x;
+        $x = $c * $m1 * $y * $k;
+        $g += 0.0745 * $x;
+        $x = $c * $m * $y1 * $k1;
+        $r += 0.1804 * $x;
+        $g += 0.1922 * $x;
+        $b += 0.5725 * $x;
+        $x = $c * $m * $y1 * $k;
+        $b += 0.0078 * $x;
+        $x = $c * $m * $y * $k1;
+        $r += 0.2118 * $x;
+        $g += 0.2119 * $x;
+        $b += 0.2235 * $x;
 
         return [max(0.0, min(1.0, $r)), max(0.0, min(1.0, $g)), max(0.0, min(1.0, $b))];
     }
@@ -206,10 +239,10 @@ final class ColorResolver {
         $fy = ($l + 16) / 116;
         $fx = $fy + $a / 500;
         $fz = $fy - $b / 200;
-        $f = static fn (float $t): float => $t > 6 / 29 ? $t ** 3 : 3 * (6 / 29) ** 2 * ($t - 4 / 29);
+        $f = static fn(float $t): float => $t > 6 / 29 ? $t ** 3 : 3 * (6 / 29) ** 2 * ($t - 4 / 29);
         [$x, $y, $z] = [0.9505 * $f($fx), $f($fy), 1.089 * $f($fz)];
         $rgb = [3.2406 * $x - 1.5372 * $y - 0.4986 * $z, -0.9689 * $x + 1.8758 * $y + 0.0415 * $z, 0.0557 * $x - 0.2040 * $y + 1.0570 * $z];
 
-        return array_map(static fn (float $v): float => max(0.0, min(1.0, $v <= 0.0031308 ? 12.92 * $v : 1.055 * $v ** (1 / 2.4) - 0.055)), $rgb);
+        return array_map(static fn(float $v): float => max(0.0, min(1.0, $v <= 0.0031308 ? 12.92 * $v : 1.055 * $v ** (1 / 2.4) - 0.055)), $rgb);
     }
 }

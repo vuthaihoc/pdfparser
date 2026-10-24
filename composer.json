@@ -41,7 +41,10 @@
     "scripts": {
         "cs": "php-cs-fixer fix --allow-risky=yes --dry-run",
         "cs:fix": "php-cs-fixer fix --allow-risky=yes",
-        "stan": "phpstan analyse --memory-limit 4G -v",
+        "stan": [
+            "phpstan analyse --memory-limit 4G -v",
+            "phpstan analyse --memory-limit 4G -v -c phpstan.render.neon"
+        ],
         "unit": "phpunit --testsuite=Unit",
         "feature": "phpunit --testsuite=Feature",
         "update-content": "php -d memory_limit=2G ./tests/Samples/update-content"

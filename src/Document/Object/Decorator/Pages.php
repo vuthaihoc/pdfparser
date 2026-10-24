@@ -56,7 +56,7 @@ class Pages extends DecoratedObject {
         $remaining = $pageNumber;
         $kids = $this->getDictionary()->getValueForKey($this->document, DictionaryKey::KIDS, ReferenceValueArray::class)->referenceValues ?? [];
         // the /Count of the kids decides which one to go into: a remote document fetches them all in one go
-        $this->document->prefetchObjects(array_map(static fn (ReferenceValue $kid) => $kid->objectNumber, $kids), 4096);
+        $this->document->prefetchObjects(array_map(static fn(ReferenceValue $kid) => $kid->objectNumber, $kids), 4096);
         foreach ($kids as $referenceValue) {
             if (in_array($referenceValue->objectNumber, $visitedObjectNrs, true)) {
                 continue;

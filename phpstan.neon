@@ -4,6 +4,8 @@ parameters:
     paths:
         - src
         - tests
+    excludePaths:
+        - src/Render # experimental, analysed at a lower level by phpstan.render.neon
     phpVersion: 80300 # Lowest currently supported version
     treatPhpDocTypesAsCertain: false
     checkBenevolentUnionTypes: true

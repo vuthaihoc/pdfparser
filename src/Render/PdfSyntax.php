@@ -35,7 +35,6 @@ final class PdfSyntax {
 
         return $value === self::END ? null : $value;
     }
-
     private const END = "\0end\0";
 
     private function next(): mixed {
@@ -143,7 +142,7 @@ final class PdfSyntax {
 
         $name = substr($this->s, $start, $this->pos - $start);
 
-        return '/' . (str_contains($name, '#') ? (preg_replace_callback('/#([0-9A-Fa-f]{2})/', static fn (array $m) => chr((int) hexdec($m[1])), $name) ?? $name) : $name);
+        return '/' . (str_contains($name, '#') ? (preg_replace_callback('/#([0-9A-Fa-f]{2})/', static fn(array $m) => chr((int) hexdec($m[1])), $name) ?? $name) : $name);
     }
 
     private function literalString(): PdfString {
@@ -154,11 +153,14 @@ final class PdfSyntax {
         while ($this->pos < $length) {
             $char = $this->s[$this->pos++];
             if ($char === '\\') {
-                $next = $this->s[$this->pos++] ?? '';
+                $next = $this->pos < $length ? $this->s[$this->pos++] : '';
                 $out .= match ($next) {
                     'n' => "\n", 'r' => "\r", 't' => "\t", 'b' => "\x08", 'f' => "\f",
                     '(' => '(', ')' => ')', '\\' => '\\',
-                    "\r" => ($this->s[$this->pos] ?? '') === "\n" ? (function () { $this->pos++; return ''; })() : '',
+                    "\r" => ($this->s[$this->pos] ?? '') === "\n" ? (function () {
+                        $this->pos++;
+                        return '';
+                    })() : '',
                     "\n" => '',
                     default => ctype_digit($next) && $next < '8' ? $this->octal($next) : $next,
                 };

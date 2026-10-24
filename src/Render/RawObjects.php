@@ -23,17 +23,13 @@ final class RawObjects {
 
     /** @var array<int, ?string> decoded streams, see streamData() */
     private array $streams = [];
-
     private const CACHED_STREAM_MAX = 1 << 20;
-
     private const CACHE_BUDGET = 32 << 20;
-
     private int $cachedBytes = 0;
 
     public function __construct(
         public readonly Document $document,
     ) {}
-
     private string|false|null $documentId = false;
 
     /** The /ID of the trailer, null when it has none: it identifies the file, and with an object number one of its objects */

@@ -62,6 +62,6 @@ final class Fidelity {
 
     /** @return array<string, array{count: int, area: float}> */
     public function issues(): array {
-        return array_map(static fn (array $d) => ['count' => $d['count'], 'area' => round(min(1.0, $d['area']), 3)], $this->issues);
+        return array_map(static fn(array $d) => ['count' => $d['count'], 'area' => round(min(1.0, $d['area']), 3)], $this->issues);
     }
 }

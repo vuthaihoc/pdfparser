@@ -128,6 +128,6 @@ class FlateDecode {
     private static function bytes(string $data): array {
         $bytes = unpack('C*', $data);
 
-        return $bytes === false ? [] : array_values(array_map(static fn (mixed $byte): int => is_int($byte) ? $byte : 0, $bytes));
+        return $bytes === false ? [] : array_values(array_map(static fn(mixed $byte): int => is_int($byte) ? $byte : 0, $bytes));
     }
 }

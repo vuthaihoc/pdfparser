@@ -17,7 +17,7 @@ class TextShowingOperatorTest extends TestCase {
         $identity = new TransformationMatrix(1, 0, 0, 1, 0, 0);
 
         return array_map(
-            static fn (TextSegment $segment) => [$segment->textString->getBinaryString(), $segment->offset],
+            static fn(TextSegment $segment) => [$segment->textString->getBinaryString(), $segment->offset],
             $operator->getPositionedTextElement($operands, $identity, $identity, new TextState(null, 10), new ColorState())->textSegments,
         );
     }

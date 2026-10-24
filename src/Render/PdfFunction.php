@@ -25,7 +25,7 @@ final class PdfFunction {
         $objectNumber = $value instanceof PdfReference ? $value->objectNumber : null;
         $resolved = $objects->resolve($value);
         if (is_array($resolved) && array_is_list($resolved)) {
-            return array_values(array_filter(array_map(static fn ($v) => self::from($objects, $v), $resolved), static fn ($f) => $f instanceof self));
+            return array_values(array_filter(array_map(static fn($v) => self::from($objects, $v), $resolved), static fn($f) => $f instanceof self));
         }
 
         $dictionary = $objects->dictionary($resolved);
@@ -84,7 +84,7 @@ final class PdfFunction {
 
     /** @return list<float> */
     private function numbers(mixed $value): array {
-        return array_map(fn ($v) => $this->objects->number($v), $this->objects->array($value) ?? []);
+        return array_map(fn($v) => $this->objects->number($v), $this->objects->array($value) ?? []);
     }
 
     /** @param list<float> $input @return list<float> */
@@ -185,7 +185,7 @@ final class PdfFunction {
      * Runs tokens from $pos until the matching "}"; nested blocks are kept for if/ifelse.
      *
      * @param list<string> $tokens
-     * @param list<float|bool> $stack
+     * @param list<float|int|bool> $stack
      */
     private function run(array $tokens, int &$pos, array &$stack, int $depth): void {
         if ($depth > 20) {
@@ -233,56 +233,139 @@ final class PdfFunction {
         }
     }
 
-    /** @param list<float|bool> $stack */
+    /** @param list<float|int|bool> $stack */
     private function operator(string $op, array &$stack): void {
         $pop = static function () use (&$stack) { return array_pop($stack) ?? 0.0; };
         switch ($op) {
-            case 'add': $b = $pop(); $a = $pop(); $stack[] = $a + $b; break;
-            case 'sub': $b = $pop(); $a = $pop(); $stack[] = $a - $b; break;
-            case 'mul': $b = $pop(); $a = $pop(); $stack[] = $a * $b; break;
-            case 'div': $b = $pop(); $a = $pop(); $stack[] = $b == 0 ? 0.0 : $a / $b; break;
-            case 'idiv': $b = (int) $pop(); $a = (int) $pop(); $stack[] = $b === 0 ? 0.0 : (float) intdiv($a, $b); break;
-            case 'mod': $b = (int) $pop(); $a = (int) $pop(); $stack[] = $b === 0 ? 0.0 : (float) ($a % $b); break;
-            case 'neg': $stack[] = -$pop(); break;
-            case 'abs': $stack[] = abs($pop()); break;
-            case 'ceiling': $stack[] = ceil($pop()); break;
-            case 'floor': $stack[] = floor($pop()); break;
-            case 'round': $stack[] = round($pop()); break;
-            case 'truncate': $v = $pop(); $stack[] = $v < 0 ? ceil($v) : floor($v); break;
-            case 'sqrt': $stack[] = sqrt(max(0, $pop())); break;
-            case 'sin': $stack[] = sin(deg2rad($pop())); break;
-            case 'cos': $stack[] = cos(deg2rad($pop())); break;
-            case 'atan': $b = $pop(); $a = $pop(); $d = rad2deg(atan2($a, $b)); $stack[] = $d < 0 ? $d + 360 : $d; break;
-            case 'exp': $b = $pop(); $a = $pop(); $stack[] = $a ** $b; break;
-            case 'ln': $stack[] = log(max(1e-12, $pop())); break;
-            case 'log': $stack[] = log10(max(1e-12, $pop())); break;
-            case 'cvi': $stack[] = (float) (int) $pop(); break;
+            case 'add': $b = $pop();
+                $a = $pop();
+                $stack[] = $a + $b;
+                break;
+            case 'sub': $b = $pop();
+                $a = $pop();
+                $stack[] = $a - $b;
+                break;
+            case 'mul': $b = $pop();
+                $a = $pop();
+                $stack[] = $a * $b;
+                break;
+            case 'div': $b = $pop();
+                $a = $pop();
+                $stack[] = $b === 0 ? 0.0 : $a / $b;
+                break;
+            case 'idiv': $b = (int) $pop();
+                $a = (int) $pop();
+                $stack[] = $b === 0 ? 0.0 : (float) intdiv($a, $b);
+                break;
+            case 'mod': $b = (int) $pop();
+                $a = (int) $pop();
+                $stack[] = $b === 0 ? 0.0 : (float) ($a % $b);
+                break;
+            case 'neg': $stack[] = -$pop();
+                break;
+            case 'abs': $stack[] = abs($pop());
+                break;
+            case 'ceiling': $stack[] = ceil($pop());
+                break;
+            case 'floor': $stack[] = floor($pop());
+                break;
+            case 'round': $stack[] = round($pop());
+                break;
+            case 'truncate': $v = $pop();
+                $stack[] = $v < 0 ? ceil($v) : floor($v);
+                break;
+            case 'sqrt': $stack[] = sqrt(max(0, $pop()));
+                break;
+            case 'sin': $stack[] = sin(deg2rad($pop()));
+                break;
+            case 'cos': $stack[] = cos(deg2rad($pop()));
+                break;
+            case 'atan': $b = $pop();
+                $a = $pop();
+                $d = rad2deg(atan2($a, $b));
+                $stack[] = $d < 0 ? $d + 360 : $d;
+                break;
+            case 'exp': $b = $pop();
+                $a = $pop();
+                $stack[] = $a ** $b;
+                break;
+            case 'ln': $stack[] = log(max(1e-12, $pop()));
+                break;
+            case 'log': $stack[] = log10(max(1e-12, $pop()));
+                break;
+            case 'cvi': $stack[] = (float) (int) $pop();
+                break;
             case 'cvr': break;
-            case 'dup': $v = $pop(); $stack[] = $v; $stack[] = $v; break;
-            case 'pop': $pop(); break;
-            case 'exch': $b = $pop(); $a = $pop(); $stack[] = $b; $stack[] = $a; break;
-            case 'copy': $n = (int) $pop(); if ($n > 0) { $stack = [...$stack, ...array_slice($stack, -$n)]; } break;
-            case 'index': $n = (int) $pop(); $stack[] = $stack[count($stack) - 1 - $n] ?? 0.0; break;
+            case 'dup': $v = $pop();
+                $stack[] = $v;
+                $stack[] = $v;
+                break;
+            case 'pop': $pop();
+                break;
+            case 'exch': $b = $pop();
+                $a = $pop();
+                $stack[] = $b;
+                $stack[] = $a;
+                break;
+            case 'copy': $n = (int) $pop();
+                if ($n > 0) {
+                    $stack = [...$stack, ...array_slice($stack, -$n)];
+                } break;
+            case 'index': $n = (int) $pop();
+                $stack[] = $stack[count($stack) - 1 - $n] ?? 0.0;
+                break;
             case 'roll':
-                $j = (int) $pop(); $n = (int) $pop();
+                $j = (int) $pop();
+                $n = (int) $pop();
                 if ($n > 0 && $n <= count($stack)) {
                     $part = array_splice($stack, -$n);
                     $j = (($j % $n) + $n) % $n;
                     $stack = [...$stack, ...array_slice($part, $n - $j), ...array_slice($part, 0, $n - $j)];
                 }
                 break;
-            case 'eq': $b = $pop(); $a = $pop(); $stack[] = $a == $b; break;
-            case 'ne': $b = $pop(); $a = $pop(); $stack[] = $a != $b; break;
-            case 'gt': $b = $pop(); $a = $pop(); $stack[] = $a > $b; break;
-            case 'ge': $b = $pop(); $a = $pop(); $stack[] = $a >= $b; break;
-            case 'lt': $b = $pop(); $a = $pop(); $stack[] = $a < $b; break;
-            case 'le': $b = $pop(); $a = $pop(); $stack[] = $a <= $b; break;
-            case 'and': $b = $pop(); $a = $pop(); $stack[] = is_bool($a) ? ($a && $b) : (float) ((int) $a & (int) $b); break;
-            case 'or': $b = $pop(); $a = $pop(); $stack[] = is_bool($a) ? ($a || $b) : (float) ((int) $a | (int) $b); break;
-            case 'xor': $b = $pop(); $a = $pop(); $stack[] = is_bool($a) ? ($a xor $b) : (float) ((int) $a ^ (int) $b); break;
-            case 'not': $a = $pop(); $stack[] = is_bool($a) ? !$a : (float) ~(int) $a; break;
-            case 'true': $stack[] = true; break;
-            case 'false': $stack[] = false; break;
+            case 'eq': $b = $pop();
+                $a = $pop();
+                $stack[] = $a === $b;
+                break;
+            case 'ne': $b = $pop();
+                $a = $pop();
+                $stack[] = $a !== $b;
+                break;
+            case 'gt': $b = $pop();
+                $a = $pop();
+                $stack[] = $a > $b;
+                break;
+            case 'ge': $b = $pop();
+                $a = $pop();
+                $stack[] = $a >= $b;
+                break;
+            case 'lt': $b = $pop();
+                $a = $pop();
+                $stack[] = $a < $b;
+                break;
+            case 'le': $b = $pop();
+                $a = $pop();
+                $stack[] = $a <= $b;
+                break;
+            case 'and': $b = $pop();
+                $a = $pop();
+                $stack[] = is_bool($a) ? ($a && $b) : (float) ((int) $a & (int) $b);
+                break;
+            case 'or': $b = $pop();
+                $a = $pop();
+                $stack[] = is_bool($a) ? ($a || $b) : (float) ((int) $a | (int) $b);
+                break;
+            case 'xor': $b = $pop();
+                $a = $pop();
+                $stack[] = is_bool($a) ? ($a xor $b) : (float) ((int) $a ^ (int) $b);
+                break;
+            case 'not': $a = $pop();
+                $stack[] = is_bool($a) ? !$a : (float) ~(int) $a;
+                break;
+            case 'true': $stack[] = true;
+                break;
+            case 'false': $stack[] = false;
+                break;
             default: break;
         }
     }

@@ -18,7 +18,6 @@ use Throwable;
 final class ImageDecoder {
     private const FILTER_ABBREVIATIONS = ['AHx' => 'ASCIIHexDecode', 'A85' => 'ASCII85Decode', 'LZW' => 'LZWDecode', 'Fl' => 'FlateDecode',
         'RL' => 'RunLengthDecode', 'CCF' => 'CCITTFaxDecode', 'DCT' => 'DCTDecode'];
-
     private const INLINE_KEYS = ['W' => 'Width', 'H' => 'Height', 'BPC' => 'BitsPerComponent', 'CS' => 'ColorSpace', 'F' => 'Filter',
         'D' => 'Decode', 'DP' => 'DecodeParms', 'IM' => 'ImageMask', 'I' => 'Interpolate'];
 
@@ -30,7 +29,7 @@ final class ImageDecoder {
 
     /**
      * @param array<string, mixed> $resources
-     * @param array{0: float, 1: float, 2: float} $fillRgb colour of stencil masks
+     * @param list<float> $fillRgb colour of stencil masks
      * @return array{image: ?Imagick, reason: ?string, approximate: ?string, masksSkipped?: bool}
      */
     public function xobject(int $objectNumber, array $resources, array $fillRgb, int $targetPixels): array {
@@ -50,7 +49,7 @@ final class ImageDecoder {
     /**
      * @param string $operands operands of the EI command: "<entries> ID <data>"
      * @param array<string, mixed> $resources
-     * @param array{0: float, 1: float, 2: float} $fillRgb
+     * @param list<float> $fillRgb
      * @return array{image: ?Imagick, reason: ?string, approximate: ?string, masksSkipped?: bool}
      */
     public function inline(string $operands, array $resources, array $fillRgb, int $targetPixels): array {
@@ -71,7 +70,7 @@ final class ImageDecoder {
 
         if (isset($dictionary['Filter'])) {
             $filters = is_array($dictionary['Filter']) ? $dictionary['Filter'] : [$dictionary['Filter']];
-            $dictionary['Filter'] = array_map(static fn ($f) => is_string($f) ? '/' . (self::FILTER_ABBREVIATIONS[ltrim($f, '/')] ?? ltrim($f, '/')) : $f, $filters);
+            $dictionary['Filter'] = array_map(static fn($f) => is_string($f) ? '/' . (self::FILTER_ABBREVIATIONS[ltrim($f, '/')] ?? ltrim($f, '/')) : $f, $filters);
         }
 
         $decoded = $this->applyFilters($data, $dictionary);
@@ -87,18 +86,18 @@ final class ImageDecoder {
         $filter = $this->objects->resolve($dictionary['Filter'] ?? null);
         $filters = is_array($filter) ? $filter : ($filter === null ? [] : [$filter]);
 
-        return array_values(array_map(static fn ($f) => is_string($f) ? ltrim($f, '/') : '?', $filters));
+        return array_values(array_map(static fn($f) => is_string($f) ? ltrim($f, '/') : '?', $filters));
     }
 
     /** All filters except the image codecs (DCT, JPX, JBIG2, CCITT) that end the chain */
     private function applyFilters(string $data, array $dictionary): ?string {
         $parms = $this->objects->resolve($dictionary['DecodeParms'] ?? null);
         foreach ($this->filters($dictionary) as $i => $filter) {
-            $parm = is_array($parms) && array_is_list($parms) ? $this->objects->dictionary($parms[$i] ?? null) : $this->objects->dictionary($parms);
+            $decodeParms = is_array($parms) && array_is_list($parms) ? $this->objects->dictionary($parms[$i] ?? null) : $this->objects->dictionary($parms);
             try {
                 $data = match ($filter) {
-                    'FlateDecode', 'Fl' => $this->predictor((string) @zlib_decode($data), $parm ?? []),
-                    'LZWDecode', 'LZW' => $this->predictor(self::lzw($data, (int) $this->objects->number(($parm ?? [])['EarlyChange'] ?? 1, 1)), $parm ?? []),
+                    'FlateDecode', 'Fl' => $this->predictor((string) @zlib_decode($data), $decodeParms ?? []),
+                    'LZWDecode', 'LZW' => $this->predictor(self::lzw($data, (int) $this->objects->number(($decodeParms ?? [])['EarlyChange'] ?? 1, 1)), $decodeParms ?? []),
                     'RunLengthDecode', 'RL' => self::runLength($data),
                     'ASCIIHexDecode', 'AHx' => ASCIIHexDecode::decodeBinary($data),
                     'ASCII85Decode', 'A85' => ASCII85Decode::decodeBinary($data),
@@ -118,15 +117,15 @@ final class ImageDecoder {
     }
 
     /** PNG predictors (10-15) of Flate/LZW data, applied per row */
-    private function predictor(string $data, array $parm): string {
-        $predictor = (int) $this->objects->number($parm['Predictor'] ?? 1, 1);
+    private function predictor(string $data, array $decodeParms): string {
+        $predictor = (int) $this->objects->number($decodeParms['Predictor'] ?? 1, 1);
         if ($predictor < 10) {
             return $data;
         }
 
-        $colors = (int) $this->objects->number($parm['Colors'] ?? 1, 1);
-        $bpc = (int) $this->objects->number($parm['BitsPerComponent'] ?? 8, 8);
-        $columns = (int) $this->objects->number($parm['Columns'] ?? 1, 1);
+        $colors = (int) $this->objects->number($decodeParms['Colors'] ?? 1, 1);
+        $bpc = (int) $this->objects->number($decodeParms['BitsPerComponent'] ?? 8, 8);
+        $columns = (int) $this->objects->number($decodeParms['Columns'] ?? 1, 1);
         $bpp = max(1, intdiv($colors * $bpc + 7, 8));
         $rowLength = intdiv($colors * $bpc * $columns + 7, 8);
         if (($bpc === 8 || $bpc === 16) && in_array($colors, [1, 3, 4], true) && ($unpredicted = self::unpredictWithPng($data, $columns, $colors, $bpc, $rowLength)) !== null) {
@@ -172,7 +171,7 @@ final class ImageDecoder {
             return null;
         }
 
-        $chunk = static fn (string $type, string $body): string => pack('N', strlen($body)) . $type . $body . pack('N', crc32($type . $body));
+        $chunk = static fn(string $type, string $body): string => pack('N', strlen($body)) . $type . $body . pack('N', crc32($type . $body));
         $png = "\x89PNG\r\n\x1a\n"
             . $chunk('IHDR', pack('NNCCCCC', $columns, $rows, $bpc, [1 => 0, 3 => 2, 4 => 6][$colors], 0, 0, 0))
             . $chunk('IDAT', (string) gzcompress(substr($data, 0, $rows * (1 + $rowLength)), 0))
@@ -277,7 +276,7 @@ final class ImageDecoder {
     /**
      * @param array<string, mixed> $dictionary
      * @param array<string, mixed> $resources
-     * @param array{0: float, 1: float, 2: float} $fillRgb
+     * @param list<float> $fillRgb
      * @return array{image: ?Imagick, reason: ?string, approximate: ?string, masksSkipped?: bool}
      */
     private function decode(array $dictionary, string $data, array $resources, array $fillRgb, int $targetPixels, bool $allowMasks): array {
@@ -304,9 +303,14 @@ final class ImageDecoder {
                 }
 
                 if (($codec === 'CCITTFaxDecode' || $codec === 'CCF') && !str_starts_with($data, "II*\0") && !str_starts_with($data, "MM\0*")) {
-                    $parm = $this->objects->dictionary($dictionary['DecodeParms'] ?? null) ?? [];
-                    $data = self::tiffForFax($data, (int) $this->objects->number($parm['Columns'] ?? 1728, 1728), (int) $this->objects->number($parm['Rows'] ?? $height, $height),
-                        (int) $this->objects->number($parm['K'] ?? 0), (bool) $this->objects->resolve($parm['BlackIs1'] ?? false));
+                    $decodeParms = $this->objects->dictionary($dictionary['DecodeParms'] ?? null) ?? [];
+                    $data = self::tiffForFax(
+                        $data,
+                        (int) $this->objects->number($decodeParms['Columns'] ?? 1728, 1728),
+                        (int) $this->objects->number($decodeParms['Rows'] ?? $height, $height),
+                        (int) $this->objects->number($decodeParms['K'] ?? 0),
+                        (bool) $this->objects->resolve($decodeParms['BlackIs1'] ?? false),
+                    );
                 }
 
                 $image->readImageBlob($data);
@@ -461,7 +465,9 @@ final class ImageDecoder {
         }
 
         if ($bpc === 8 || $bpc === 16) {
-            $format = match ($family) { 'RGB' => 'rgb', 'CMYK' => 'cmyk', default => 'gray' };
+            $format = match ($family) {
+                'RGB' => 'rgb', 'CMYK' => 'cmyk', default => 'gray',
+            };
             $expected = $width * $height * ($format === 'rgb' ? 3 : ($format === 'cmyk' ? 4 : 1)) * intdiv($bpc, 8);
             $data = str_pad(substr($data, 0, $expected), $expected, "\0");
             $image = new Imagick();
@@ -522,7 +528,7 @@ final class ImageDecoder {
     private static function png(int $width, int $height, int $bpc, int $colorType, int $channels, string $data, ?string $palette = null): string {
         $rowLength = intdiv($width * $channels * $bpc + 7, 8);
         $data = str_pad(substr($data, 0, $rowLength * $height), $rowLength * $height, "\0");
-        $chunk = static fn (string $type, string $body): string => pack('N', strlen($body)) . $type . $body . pack('N', crc32($type . $body));
+        $chunk = static fn(string $type, string $body): string => pack('N', strlen($body)) . $type . $body . pack('N', crc32($type . $body));
 
         return "\x89PNG\r\n\x1a\n"
             . $chunk('IHDR', pack('NNCCCCC', $width, $height, $bpc, $colorType, 0, 0, 0))
@@ -572,7 +578,7 @@ final class ImageDecoder {
             $entries[] = [292, 4, 1, 1];
         }
 
-        usort($entries, static fn ($a, $b) => $a[0] <=> $b[0]);
+        usort($entries, static fn($a, $b) => $a[0] <=> $b[0]);
         $ifdOffset = 8;
         $dataOffset = $ifdOffset + 2 + count($entries) * 12 + 4;
         $ifd = pack('v', count($entries));
