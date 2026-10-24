@@ -16,11 +16,12 @@
 ### Installation
 
 ```bash
-composer require vuthaihoc/pdfparser:dev-main
+composer require vuthaihoc/pdfparser
 ```
 
-The package is on [Packagist](https://packagist.org/packages/vuthaihoc/pdfparser); there are no tagged releases yet, so
-require `dev-main` (or `3.x-dev`, its branch alias).
+The package is on [Packagist](https://packagist.org/packages/vuthaihoc/pdfparser). Releases of this fork continue
+upstream's numbering from v3.9.0 (upstream v3.8.0 + this fork's changes + upstream main up to the release);
+`dev-main` (alias `3.x-dev`) follows the main branch.
 
 The renderer needs `ext-imagick` (ImageMagick with FreeType; Liberation fonts and `fc-match` for fonts that are not
 embedded), `HttpRangeStream` needs `ext-curl`.
