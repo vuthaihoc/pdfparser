@@ -68,4 +68,32 @@ class RangeStreamTest extends TestCase {
         static::assertSame(3, $stream->requests);
         static::assertSame(40, $stream->bytesFetched);
     }
+
+    public function testKeepsAtMostMaxBlocks(): void {
+        $content = str_repeat('0123456789', 10);
+        $calls = 0;
+        $stream = new RangeStream(static function (int $from, int $to) use ($content, &$calls): string {
+            $calls++;
+
+            return substr($content, $from, $to - $from + 1);
+        }, strlen($content), 10, 2);
+
+        static::assertSame('01', $stream->read(0, 2));
+        static::assertSame('2345678901', $stream->read(12, 10));
+        static::assertSame(2, $calls);
+        static::assertSame('01', $stream->read(0, 2)); // block 0 was dropped: fetched again
+        static::assertSame(3, $calls);
+    }
+
+    public function testFile(): void {
+        $path = tempnam(sys_get_temp_dir(), 'range');
+        static::assertIsString($path);
+        file_put_contents($path, str_repeat('abcdefghij', 1000));
+        $stream = RangeStream::file($path, 64, 4);
+
+        static::assertSame(10000, $stream->getSizeInBytes());
+        static::assertSame('jabc', $stream->read(9989, 4));
+        static::assertSame(str_repeat('abcdefghij', 1000), $stream->toString());
+        unlink($path);
+    }
 }

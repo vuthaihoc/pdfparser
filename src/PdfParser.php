@@ -11,6 +11,7 @@ use PrinsFrank\PdfParser\Exception\InvalidArgumentException;
 use PrinsFrank\PdfParser\Exception\PdfParserException;
 use PrinsFrank\PdfParser\Stream\FileStream;
 use PrinsFrank\PdfParser\Stream\InMemoryStream;
+use PrinsFrank\PdfParser\Stream\RangeStream;
 use PrinsFrank\PdfParser\Stream\Stream;
 
 /** @api */
@@ -26,7 +27,7 @@ class PdfParser {
     }
 
     /**
-     * @param bool $useInMemoryStream if set to false, a handle to the file itself will be used. This uses less memory, but will be significantly slower
+     * @param bool $useInMemoryStream if set to false, the file is read in blocks as the parser needs them, keeping at most 16 MiB of it (RangeStream::file())
      * @throws PdfParserException
      */
     public function parseFile(string $filePath, bool $useInMemoryStream = true, ?StandardSecurity $security = null): Document {
@@ -38,7 +39,7 @@ class PdfParser {
 
             $stream = new InMemoryStream($fileContent);
         } else {
-            $stream = FileStream::openFile($filePath);
+            $stream = RangeStream::file($filePath);
         }
 
         return $this->parse($stream, $security);

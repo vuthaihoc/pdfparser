@@ -13,8 +13,9 @@ use PrinsFrank\PdfParser\Exception\InvalidArgumentException;
 use PrinsFrank\PdfParser\Exception\RuntimeException;
 
 /**
- * A stream that only fetches the byte ranges the parser reads, in blocks that are kept for the next reads.
- * Missing blocks next to each other are fetched in one call. The fetcher gets an inclusive byte range.
+ * A stream that only fetches the byte ranges the parser reads, in blocks that are kept for the next reads (the most
+ * recent $maxBlocks of them when that is set). Missing blocks next to each other are fetched in one call. The fetcher
+ * gets an inclusive byte range.
  *
  * @api
  */
@@ -29,15 +30,43 @@ class RangeStream extends AbstractStream {
     /**
      * @param Closure(int $from, int $to): string $fetch
      * @param int<1, max> $blockSize
+     * @param ?int $maxBlocks blocks kept at most (the oldest are dropped), null: all
      */
     public function __construct(
         private readonly Closure $fetch,
         private readonly int $size,
         private readonly int $blockSize = 65536,
+        private readonly ?int $maxBlocks = null,
     ) {
         if ($blockSize < 1) {
             throw new InvalidArgumentException('Block size must be at least 1 byte');
         }
+    }
+
+    /**
+     * A local file read in blocks: as fast as reading it into memory for the parser's many small reads, keeping at
+     * most $maxBlocks × $blockSize bytes of it (16 MiB by default)
+     *
+     * @param int<1, max> $blockSize
+     * @throws InvalidArgumentException
+     */
+    public static function file(string $path, int $blockSize = 65536, ?int $maxBlocks = 256): self {
+        $handle = @fopen($path, 'rb');
+        if ($handle === false) {
+            throw new InvalidArgumentException(sprintf('Failed to open file at path "%s"', $path));
+        }
+
+        $size = fstat($handle)['size'] ?? 0;
+
+        return new self(static function (int $from, int $to) use ($handle): string {
+            fseek($handle, $from);
+            $bytes = '';
+            while (($missing = $to - $from + 1 - strlen($bytes)) > 0 && ($chunk = fread($handle, $missing)) !== false && $chunk !== '') {
+                $bytes .= $chunk;
+            }
+
+            return $bytes;
+        }, $size, $blockSize, $maxBlocks);
     }
 
     /** Seeds a block fetched by someone else, e.g. the first block of the request that found the size. */
@@ -147,6 +176,10 @@ class RangeStream extends AbstractStream {
         $bytes = '';
         for ($block = $firstBlock; $block <= $lastBlock; $block++) {
             $bytes .= $this->blocks[$block];
+        }
+
+        if ($this->maxBlocks !== null && count($this->blocks) > $this->maxBlocks) {
+            $this->blocks = array_slice($this->blocks, -max(1, $this->maxBlocks), null, true);
         }
 
         return substr($bytes, $from - $firstBlock * $this->blockSize, $to - $from);
