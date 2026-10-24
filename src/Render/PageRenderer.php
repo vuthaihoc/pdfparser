@@ -91,11 +91,14 @@ final class PageRenderer {
         $this->objects = new RawObjects($document);
         $this->colors = new ColorResolver($this->objects);
         $this->images = new ImageDecoder($this->objects, $this->colors, $options->imageMasks);
-        $this->fonts = new FontMapper();
+        $this->fonts = new FontMapper($options->fontCacheDirectory);
     }
 
-    /** @param int $width width of the result in pixels */
-    public function render(Page $page, int $width = 300): RenderResult {
+    /**
+     * @param int $width width of the result in pixels: of the page, or of the region when $crop is given
+     * @param ?Crop $crop a region of the page to render instead of all of it; only what reaches it is drawn
+     */
+    public function render(Page $page, int $width = 300, ?Crop $crop = null): RenderResult {
         $start = hrtime(true);
         memory_reset_peak_usage();
         if ($this->options->memoryLimit !== null) {
@@ -119,10 +122,19 @@ final class PageRenderer {
         [$llx, $lly, $urx, $ury] = $box;
         $boxWidth = max(1.0, $urx - $llx);
         $boxHeight = max(1.0, $ury - $lly);
-        $scale = $width * $supersample / ($rotate === 90 || $rotate === 270 ? $boxHeight : $boxWidth);
-        $this->canvasWidth = max(1, (int) round($boxWidth * $scale));
-        $this->canvasHeight = max(1, (int) round($boxHeight * $scale));
-        $this->base = [$scale, 0, 0, -$scale, -$llx * $scale, $ury * $scale];
+        $sideways = $rotate === 90 || $rotate === 270;
+        [$left, $top, $right, $bottom] = $crop?->resolve($sideways ? $boxHeight : $boxWidth, $sideways ? $boxWidth : $boxHeight) ?? [0.0, 0.0, 1.0, 1.0];
+        // the region as shares of the page before /Rotate turns it (the canvas is turned at the end)
+        [$u0, $v0, $u1, $v1] = match ($rotate) {
+            90 => [$top, 1 - $right, $bottom, 1 - $left],
+            180 => [1 - $right, 1 - $bottom, 1 - $left, 1 - $top],
+            270 => [1 - $bottom, $left, 1 - $top, $right],
+            default => [$left, $top, $right, $bottom],
+        };
+        $scale = $width * $supersample / (($right - $left) * ($sideways ? $boxHeight : $boxWidth));
+        $this->canvasWidth = max(1, (int) round(($u1 - $u0) * $boxWidth * $scale));
+        $this->canvasHeight = max(1, (int) round(($v1 - $v0) * $boxHeight * $scale));
+        $this->base = [$scale, 0, 0, -$scale, -($llx + $u0 * $boxWidth) * $scale, ($ury - $v0 * $boxHeight) * $scale];
         $this->canvas = new Imagick();
         $this->canvas->newImage((int) $this->canvasWidth, (int) $this->canvasHeight, new ImagickPixel('white'));
         $this->canvas->setImageFormat('png');
@@ -503,6 +515,11 @@ final class PageRenderer {
         return $bbox === null ? [$x, $y, $x, $y] : [min($bbox[0], $x), min($bbox[1], $y), max($bbox[2], $x), max($bbox[3], $y)];
     }
 
+    /** Whether a device bounding box lies entirely off the canvas (outside the crop): nothing of it shows */
+    private function offCanvas(?array $bbox): bool {
+        return $bbox !== null && ($bbox[2] < 0 || $bbox[3] < 0 || $bbox[0] > $this->canvasWidth || $bbox[1] > $this->canvasHeight);
+    }
+
     private function area(?array $bbox): float {
         if ($bbox === null) {
             return 0.0;
@@ -602,6 +619,10 @@ final class PageRenderer {
         $cmds = $path['cmds'];
         if ($close) {
             $cmds[] = ['Z'];
+        }
+
+        if ($this->offCanvas($path['bbox'])) {
+            return;
         }
 
         $area = $this->area($path['bbox']);
@@ -1132,6 +1153,10 @@ final class PageRenderer {
             $bbox = [$origin[4] - $reach, $origin[5] - $reach, $origin[4] + $reach, $origin[5] + $reach];
         }
 
+        if ($this->offCanvas($bbox)) {
+            return;
+        }
+
         $area = $this->area($bbox);
         $this->stats['texts']++;
         $this->fidelity->add($issue, $area);
@@ -1263,7 +1288,7 @@ final class PageRenderer {
         }
 
         $area = $this->area($bbox);
-        if ($area < 0.5) {
+        if ($area < 0.5) { // also off the canvas: not decoded at all
             return;
         }
 

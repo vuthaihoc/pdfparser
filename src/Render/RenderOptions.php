@@ -55,6 +55,8 @@ final class RenderOptions {
         public readonly ?int $memoryLimit = null,
         /** ImageMagick threads, null: its default; set for the process */
         public readonly ?int $threads = null,
+        /** where rebuilt embedded fonts are kept between renders and processes, null: pdfparser-render-fonts in the temporary directory */
+        public readonly ?string $fontCacheDirectory = null,
     ) {}
 
     /** The defaults: embedded fonts, every construct drawn, 2× supersampling */

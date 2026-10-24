@@ -110,6 +110,11 @@ final class CffFont {
         return $this->gidByName;
     }
 
+    /** @return array<int, int> CID => gid (CID-keyed) */
+    public function cidTable(): array {
+        return $this->gidByCid;
+    }
+
     public function gidForCid(int $cid): ?int {
         return $this->cidKeyed ? ($this->gidByCid[$cid] ?? null) : ($cid < $this->glyphCount ? $cid : null);
     }

@@ -16,6 +16,11 @@ final class FontMapper {
     /** @var array<string, string> query => font file */
     private static array $files = [];
 
+    /** @param ?string $cacheDirectory where rebuilt font programs are kept, null: pdfparser-render-fonts in the temporary directory */
+    public function __construct(
+        private readonly ?string $cacheDirectory = null,
+    ) {}
+
     /** @var array<string, array<string, float>> font file => character => width at size 100 */
     private array $widths = [];
 
@@ -49,12 +54,21 @@ final class FontMapper {
         $italic = $italic || preg_match('/italic|oblique|ital/', $name) === 1;
         $query = $family . ($bold ? ':bold' : '') . ($italic ? ':italic' : '');
 
-        return self::$files[$query] ??= self::match($query);
+        return self::$files[$query] ??= $this->match($query);
     }
 
-    private static function match(string $query): string {
+    /** The font file fontconfig picks for $query, remembered in the cache directory (fc-match takes ~10 ms) */
+    private function match(string $query): string {
+        $cache = $this->cacheDirectory() . '/fc-match-' . sha1($query) . '.txt';
+        $file = is_file($cache) ? trim((string) file_get_contents($cache)) : '';
+        if ($file !== '' && is_file($file)) {
+            return $file;
+        }
+
         $file = trim((string) @shell_exec('fc-match -f %{file} ' . escapeshellarg($query) . ' 2>/dev/null'));
         if ($file !== '' && is_file($file)) {
+            self::write($cache, $file);
+
             return $file;
         }
 
@@ -67,75 +81,20 @@ final class FontMapper {
         return 'DejaVu-Sans';
     }
 
-    /** @var array<int, string|false> font object nr => file of its embedded program, false when there is none or it does not load */
-    private array $embedded = [];
-
-    /**
-     * The embedded font program of a font (FontFile, FontFile2, FontFile3; of the descendant font for Type0) written
-     * to a temporary file that FreeType can open, or null.
-     */
-    public function embedded(RawObjects $objects, int $fontObjectNumber): ?string {
-        if (array_key_exists($fontObjectNumber, $this->embedded)) {
-            return $this->embedded[$fontObjectNumber] === false ? null : $this->embedded[$fontObjectNumber];
-        }
-
-        $this->embedded[$fontObjectNumber] = false;
-        $font = $objects->dictionary($objects->value($fontObjectNumber)) ?? [];
-        if (isset($font['DescendantFonts'])) {
-            $font = $objects->dictionary(($objects->array($font['DescendantFonts']) ?? [])[0] ?? null) ?? [];
-        }
-
-        $descriptor = $objects->dictionary($font['FontDescriptor'] ?? null) ?? [];
-        foreach (['FontFile2' => 'ttf', 'FontFile3' => null, 'FontFile' => 'pfa'] as $key => $extension) {
-            $reference = $descriptor[$key] ?? null;
-            if (!$reference instanceof PdfReference) {
-                continue;
-            }
-
-            $data = $objects->streamData($reference->objectNumber);
-            if ($data === null || strlen($data) < 32) {
-                continue;
-            }
-
-            if ($extension === null) {
-                $subtype = $objects->name(($objects->dictionary($objects->value($reference->objectNumber)) ?? [])['Subtype'] ?? null);
-                $extension = $subtype === 'OpenType' ? 'otf' : 'cff';
-            }
-
-            $directory = sys_get_temp_dir() . '/pdfparser-render-fonts';
-            if (!is_dir($directory)) {
-                @mkdir($directory, 0777, true);
-            }
-
-            $file = $directory . '/' . sha1($data) . '.' . $extension;
-            if (!is_file($file)) {
-                self::write($file, $data);
-            }
-
-            try {
-                $draw = new ImagickDraw();
-                $draw->setFont($file);
-                $draw->setFontSize(100);
-                $this->probe()->queryFontMetrics($draw, 'a');
-                $this->draws[$file] = $draw;
-
-                return $this->embedded[$fontObjectNumber] = $file;
-            } catch (\Throwable) {
-                continue;
-            }
-        }
-
-        return null;
-    }
-
     /** @var array<int, array{file: string, map: \Closure(int): ?int, space: bool, glyphCount: int}|false> */
     private array $glyphFonts = [];
+
+    /** Changes when what is cached changes */
+    private const CACHE_VERSION = 1;
 
     /**
      * The embedded program of a font rebuilt to be drawn by glyph id (OpenType::text()), with the PDF widths as
      * advances, and the map from character code (simple fonts) or CID (Type0 with Identity-H/V) to glyph id. For
-     * TrueType (FontFile2) and CFF (FontFile3 Type1C, CIDFontType0C, OpenType) programs; null for others.
+     * TrueType (FontFile2), CFF (FontFile3 Type1C, CIDFontType0C, OpenType) and Type 1 (FontFile) programs.
      * space: U+0020 is the glyph of code 32, so word spacing can be applied to it.
+     *
+     * The rebuilt program and the map are kept in the cache directory, keyed by the program, the encoding and the
+     * widths, so another request for the same font reads them instead of parsing and rebuilding the program.
      *
      * @return array{file: string, map: \Closure(int): ?int, space: bool, glyphCount: int}|null
      */
@@ -153,68 +112,141 @@ final class FontMapper {
         }
 
         $descriptor = $objects->dictionary($font['FontDescriptor'] ?? null) ?? [];
+        $kind = $program = null;
+        foreach (['FontFile' => 'type1', 'FontFile2' => 'truetype', 'FontFile3' => 'cff'] as $key => $programKind) {
+            if (($reference = $descriptor[$key] ?? null) instanceof PdfReference && ($programKind !== 'type1' || !$composite)) {
+                $kind = $programKind;
+                $program = $reference->objectNumber;
+                break;
+            }
+        }
+
+        // the stored bytes identify the program without decoding it; decoded only when it is not cached
+        $stored = $program === null ? null : ($objects->rawStreamBytes($program) ?? $objects->streamData($program));
+        if ($kind === null || $program === null || $stored === null || strlen($stored) < 32) {
+            return null;
+        }
+
+        [$widths, $default] = $this->pdfWidths($objects, $top, $font, $descriptor, $composite);
+        $encoding = $objects->resolve($top['Encoding'] ?? null);
+        $cidToGid = $font['CIDToGIDMap'] ?? null;
+        $key = sha1(json_encode([
+            self::CACHE_VERSION, $kind, sha1($stored), $composite, $widths, $default,
+            is_string($encoding) ? $encoding : $objects->name(($objects->dictionary($encoding) ?? [])['BaseEncoding'] ?? null),
+            $this->differences($objects, $top),
+            $cidToGid instanceof PdfReference && !is_string($objects->resolve($cidToGid)) ? sha1((string) $objects->streamData($cidToGid->objectNumber)) : null,
+        ], JSON_THROW_ON_ERROR));
+        $cached = $this->readCache($key);
+        if ($cached === false) {
+            return null;
+        }
+
+        if ($cached === null) {
+            $data = $objects->streamData($program);
+            $cached = $data === null ? null : $this->build($objects, $top, $font, $kind, $data, $composite, $widths, $default);
+            if ($cached === null) {
+                $this->writeCache($key, ['failed' => true]);
+
+                return null;
+            }
+
+            $file = $this->cacheDirectory() . '/' . $key . '.' . $cached['extension'];
+            self::write($file, $cached['bytes']);
+            try {
+                $draw = new ImagickDraw();
+                $draw->setFont($file);
+                $draw->setFontSize(100);
+                $this->probe()->queryFontMetrics($draw, OpenType::text([min(3, $cached['glyphCount'] - 1)]));
+            } catch (\Throwable) {
+                $this->writeCache($key, ['failed' => true]);
+
+                return null;
+            }
+
+            unset($cached['bytes']);
+            $cached['file'] = basename($file);
+            $this->writeCache($key, $cached);
+        }
+
+        $table = $cached['table'];
+        $identity = $cached['identity'];
+
+        return $this->glyphFonts[$fontObjectNumber] = [
+            'file' => $this->cacheDirectory() . '/' . $cached['file'],
+            'map' => static fn (int $code): ?int => $table[$code] ?? ($identity !== null && $code > 0 && $code < $identity ? $code : null),
+            'space' => $cached['space'],
+            'glyphCount' => $cached['glyphCount'],
+        ];
+    }
+
+    /**
+     * Parses and rebuilds a program: the font file and its code (or CID) => gid map as a table, plus the codes up to
+     * $identity that are their own gid (Type0 with an identity CIDToGIDMap)
+     *
+     * @param array<string, mixed> $top
+     * @param array<string, mixed> $font
+     * @param array<int, float> $widths
+     * @return array{bytes: string, extension: string, glyphCount: int, space: bool, table: array<int, int>, identity: ?int}|null
+     */
+    private function build(RawObjects $objects, array $top, array $font, string $kind, string $data, bool $composite, array $widths, float $default): ?array {
         $ttf = $cff = $type1 = null;
-        if (!$composite && ($reference = $descriptor['FontFile'] ?? null) instanceof PdfReference) {
-            $data = $objects->streamData($reference->objectNumber);
-            $type1 = $data === null ? null : Type1Font::parse($data);
-        } elseif (($reference = $descriptor['FontFile2'] ?? null) instanceof PdfReference) {
-            $data = $objects->streamData($reference->objectNumber);
-            $ttf = $data === null ? null : TrueTypeFont::parse($data);
-        } elseif (($reference = $descriptor['FontFile3'] ?? null) instanceof PdfReference) {
-            $data = $objects->streamData($reference->objectNumber);
-            $cff = $data === null ? null : (CffFont::parse($data) ?? CffFont::fromOpenType($data));
-            $ttf = $cff === null && $data !== null ? TrueTypeFont::parse($data) : null;
+        if ($kind === 'type1') {
+            $type1 = Type1Font::parse($data);
+        } elseif ($kind === 'truetype') {
+            $ttf = TrueTypeFont::parse($data);
+        } else {
+            $cff = CffFont::parse($data) ?? CffFont::fromOpenType($data);
+            $ttf = $cff === null ? TrueTypeFont::parse($data) : null;
         }
 
         if ($ttf === null && $cff === null && $type1 === null) {
             return null;
         }
 
-        [$widths, $default] = $this->pdfWidths($objects, $top, $font, $descriptor, $composite);
-        $map = match (true) {
-            $composite => $this->cidMap($objects, $font, $ttf, $cff),
-            $ttf !== null => $this->trueTypeCodeMap($objects, $top, $ttf),
-            $cff !== null => $this->namedCodeMap($objects, $top, $cff->glyphNames(), $cff->gidForCode(...)),
-            default => $this->namedCodeMap($objects, $top, $type1->glyphNames(), static fn (int $code): ?int => $type1->gidForName($type1->builtInName($code) ?? '')),
-        };
         $glyphCount = $ttf->glyphCount ?? $cff->glyphCount ?? $type1?->glyphCount() ?? 0;
+        $identity = null;
+        $table = [];
+        if ($composite) {
+            [$table, $identity] = $this->cidTable($objects, $font, $glyphCount, $cff);
+        } else {
+            $map = match (true) {
+                $ttf !== null => $this->trueTypeCodeMap($objects, $top, $ttf),
+                $cff !== null => $this->namedCodeMap($objects, $top, $cff->glyphNames(), $cff->gidForCode(...)),
+                default => $this->namedCodeMap($objects, $top, $type1->glyphNames(), static fn (int $code): ?int => $type1->gidForName($type1->builtInName($code) ?? '')),
+            };
+            for ($code = 0; $code < 256; $code++) {
+                if (($gid = $map($code)) !== null && $gid > 0 && $gid < $glyphCount) {
+                    $table[$code] = $gid;
+                }
+            }
+        }
+
+        $gidOf = static fn (int $code): ?int => $table[$code] ?? ($identity !== null && $code > 0 && $code < $identity ? $code : null);
         // a glyph gets the width of the first code that shows it; codes named by Differences go first, an unused
         // code can reach the same glyph through the built-in encoding with a placeholder width
         $advances = [];
         $differences = $composite ? [] : $this->differences($objects, $top);
         foreach (array_replace(array_intersect_key($widths, $differences), $widths) as $code => $width) {
-            if (($gid = $map($code)) !== null && !isset($advances[$gid])) {
+            if (($gid = $gidOf($code)) !== null && !isset($advances[$gid])) {
                 $advances[$gid] = $width;
             }
         }
 
-        $spaceGid = $composite || $type1 !== null ? null : $map(32);
+        $spaceGid = $composite || $type1 !== null ? null : $gidOf(32);
         $extra = $spaceGid !== null ? [0x20 => $spaceGid] : [];
-        $bytes = match (true) {
-            $ttf !== null => $ttf->rebuilt($composite ? $advances + array_fill(0, $glyphCount, $default) : $advances, $extra),
-            $cff !== null => $cff->openType($advances, $default, $extra),
-            default => $type1->rebuilt($advances),
-        };
-        $directory = sys_get_temp_dir() . '/pdfparser-render-fonts';
-        if (!is_dir($directory)) {
-            @mkdir($directory, 0777, true);
-        }
 
-        $file = $directory . '/' . sha1($bytes) . ($ttf !== null ? '.ttf' : ($cff !== null ? '.otf' : '.pfa'));
-        if (!is_file($file)) {
-            self::write($file, $bytes);
-        }
-
-        try {
-            $draw = new ImagickDraw();
-            $draw->setFont($file);
-            $draw->setFontSize(100);
-            $this->probe()->queryFontMetrics($draw, OpenType::text([min(3, $glyphCount - 1)]));
-        } catch (\Throwable) {
-            return null;
-        }
-
-        return $this->glyphFonts[$fontObjectNumber] = ['file' => $file, 'map' => $map, 'space' => $spaceGid !== null, 'glyphCount' => $glyphCount];
+        return [
+            'bytes' => match (true) {
+                $ttf !== null => $ttf->rebuilt($composite ? $advances + array_fill(0, $glyphCount, $default) : $advances, $extra),
+                $cff !== null => $cff->openType($advances, $default, $extra),
+                default => $type1->rebuilt($advances),
+            },
+            'extension' => $ttf !== null ? 'ttf' : ($cff !== null ? 'otf' : 'pfa'),
+            'glyphCount' => $glyphCount,
+            'space' => $spaceGid !== null,
+            'table' => $table,
+            'identity' => $identity,
+        ];
     }
 
     /**
@@ -261,21 +293,31 @@ final class FontMapper {
     }
 
     /**
+     * CID => gid of a descendant CIDFont: the charset of a CID-keyed CFF program, the CIDToGIDMap stream of a
+     * TrueType one, or identity (the returned limit) otherwise
+     *
      * @param array<string, mixed> $font the descendant CIDFont
-     * @return \Closure(int): ?int
+     * @return array{array<int, int>, ?int}
      */
-    private function cidMap(RawObjects $objects, array $font, ?TrueTypeFont $ttf, ?CffFont $cff): \Closure {
+    private function cidTable(RawObjects $objects, array $font, int $glyphCount, ?CffFont $cff): array {
         if ($cff !== null) {
-            return static fn (int $cid): ?int => $cff->gidForCid($cid);
+            return $cff->cidKeyed ? [$cff->cidTable(), null] : [[], $glyphCount];
         }
 
-        $table = $font['CIDToGIDMap'] ?? null;
-        $bytes = $table instanceof PdfReference && !is_string($objects->resolve($table)) ? (string) $objects->streamData($table->objectNumber) : null;
-        $count = $ttf->glyphCount ?? 0;
+        $map = $font['CIDToGIDMap'] ?? null;
+        $bytes = $map instanceof PdfReference && !is_string($objects->resolve($map)) ? (string) $objects->streamData($map->objectNumber) : null;
+        if ($bytes === null) {
+            return [[], $glyphCount];
+        }
 
-        return $bytes === null
-            ? static fn (int $cid): ?int => $cid < $count ? $cid : null
-            : static fn (int $cid): ?int => 2 * $cid + 1 < strlen($bytes) ? (ord($bytes[2 * $cid]) << 8) | ord($bytes[2 * $cid + 1]) : null;
+        $table = [];
+        foreach (array_values(unpack('n*', substr($bytes, 0, strlen($bytes) - strlen($bytes) % 2)) ?: []) as $cid => $gid) {
+            if ($gid > 0 && $gid < $glyphCount) {
+                $table[$cid] = $gid;
+            }
+        }
+
+        return [$table, null];
     }
 
     /**
@@ -404,6 +446,48 @@ final class FontMapper {
         }
 
         return null;
+    }
+
+    private function cacheDirectory(): string {
+        $directory = $this->cacheDirectory ?? sys_get_temp_dir() . '/pdfparser-render-fonts';
+        if (!is_dir($directory)) {
+            @mkdir($directory, 0777, true);
+        }
+
+        return $directory;
+    }
+
+    /**
+     * A cached rebuild: false when the program could not be used, null when it is not cached (or its font file is gone)
+     *
+     * @return array{file: string, glyphCount: int, space: bool, table: array<int, int>, identity: ?int}|false|null
+     */
+    private function readCache(string $key): array|false|null {
+        $path = $this->cacheDirectory() . '/' . $key . '.json';
+        $entry = is_file($path) ? json_decode((string) file_get_contents($path), true) : null;
+        if (!is_array($entry)) {
+            return null;
+        }
+
+        if (($entry['failed'] ?? false) === true) {
+            return false;
+        }
+
+        if (!isset($entry['file'], $entry['glyphCount'], $entry['space'], $entry['table']) || !is_file($this->cacheDirectory() . '/' . $entry['file'])) {
+            return null;
+        }
+
+        $table = [];
+        foreach ((array) $entry['table'] as $code => $gid) {
+            $table[(int) $code] = (int) $gid;
+        }
+
+        return ['file' => (string) $entry['file'], 'glyphCount' => (int) $entry['glyphCount'], 'space' => (bool) $entry['space'], 'table' => $table, 'identity' => isset($entry['identity']) ? (int) $entry['identity'] : null];
+    }
+
+    /** @param array<string, mixed> $entry */
+    private function writeCache(string $key, array $entry): void {
+        self::write($this->cacheDirectory() . '/' . $key . '.json', (string) json_encode($entry));
     }
 
     /** Writes a font file whole or not at all: other processes may read it while it is written */

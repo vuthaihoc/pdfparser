@@ -44,6 +44,19 @@ $result->timings; // seconds per stage: parse, interpret, text, fonts, image_dec
 $result->memory;  // PHP and ImageMagick peaks
 ```
 
+A region of the page (a figure, a table) can be rendered on its own, faster than the page since only what reaches it
+is drawn, with the width given for the region:
+
+```php
+use PrinsFrank\PdfParser\Render\Crop;
+
+$renderer->render($document->getPage(3), 600, Crop::fractions(0.1, 0.2, 0.9, 0.5)); // shares of the displayed page
+$renderer->render($document->getPage(3), 600, Crop::pixels(141, 162, 921, 426, 1000)); // pixels on a 1000 px wide rendering
+```
+
+Embedded fonts are rebuilt once and kept, with their glyph maps, in a cache directory shared by renders and processes
+(`RenderOptions::$fontCacheDirectory`, by default `pdfparser-render-fonts` in the temporary directory).
+
 It draws paths, clipping, images (all filters and colour spaces, soft masks), forms, axial and radial shadings,
 annotation appearances and text. Text is drawn with the fonts embedded in the PDF: TrueType, CFF and Type 1 programs
 are rebuilt to be drawn by glyph id with the PDF widths, so text lands where the PDF puts it; fonts that are not
