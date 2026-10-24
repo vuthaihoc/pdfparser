@@ -1,9 +1,14 @@
 <picture>
-    <source srcset="https://github.com/PrinsFrank/pdfparser/raw/main/docs/images/banner_dark.png" media="(prefers-color-scheme: dark)">
-    <img src="https://github.com/PrinsFrank/pdfparser/raw/main/docs/images/banner_light.png" alt="Banner">
+    <source srcset="https://github.com/vuthaihoc/pdfparser/raw/main/docs/images/banner_fork_dark.png" media="(prefers-color-scheme: dark)">
+    <img src="https://github.com/vuthaihoc/pdfparser/raw/main/docs/images/banner_fork_light.png" alt="PDF Parser, a fork of prinsfrank/pdfparser">
 </picture>
 
 # PDF Parser
+
+[![CI](https://github.com/vuthaihoc/pdfparser/actions/workflows/ci.yml/badge.svg)](https://github.com/vuthaihoc/pdfparser/actions/workflows/ci.yml)
+[![Packagist](https://img.shields.io/packagist/v/vuthaihoc/pdfparser)](https://packagist.org/packages/vuthaihoc/pdfparser)
+[![PHP Version Support](https://img.shields.io/packagist/php-v/vuthaihoc/pdfparser)](https://github.com/vuthaihoc/pdfparser/blob/main/composer.json)
+[![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/vuthaihoc/pdfparser/blob/main/LICENSE)
 
 > **This is a fork** of [prinsfrank/pdfparser](https://github.com/PrinsFrank/pdfparser) used by OneLib. It adds an
 > experimental page renderer, reading PDFs over HTTP Range requests and a set of parser fixes. The namespace is
@@ -105,14 +110,17 @@ PDF on a server ~0.5 s away: 6 round trips and 0.8 MB instead of 10 round trips,
 
 - Page `/Contents` and Type0 `/DescendantFonts` that refer to an array of references.
 - `Tj`/`TJ`/`"` operands tokenized: adjustments after whitespace or written as `.5`, escaped and nested parentheses,
-  `"` with spaces in its string.
+    `"` with spaces in its string.
 - Character codes from the bytes of a string (hexadecimal strings of Type0 fonts were read as 16-bit pairs).
 - FlateDecode PNG predictors per pixel and per row length (multi-component images came out as garbage) and much
-  faster, TIFF predictor 2.
+    faster, TIFF predictor 2.
 - Content strings ending in an escaped backslash; widths of composite fonts by 2-byte codes.
 - A dictionary entry with a value of an unexpected type is skipped instead of failing the whole dictionary.
 - `sh` and `b` operators; inline images as one `EI` command.
 - An empty stream is an empty string.
+- Objects in object streams of encrypted (RC4) documents: the object stream is decrypted before its offsets are read.
+- `parseFile($path, false)` reads the file in cached blocks (`RangeStream::file()`) instead of unbuffered `FileStream`
+    reads, about ten times faster.
 
 
 [![GitHub](https://img.shields.io/badge/license-MIT-green)](https://github.com/PrinsFrank/pdfparser/blob/main/LICENSE)
