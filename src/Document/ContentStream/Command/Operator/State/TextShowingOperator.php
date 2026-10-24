@@ -7,6 +7,7 @@ use Override;
 use PrinsFrank\PdfParser\Document\ContentStream\Command\Operator\State\Interaction\InteractsWithTextState;
 use PrinsFrank\PdfParser\Document\ContentStream\Command\Operator\State\Interaction\InteractsWithTransformationMatrix;
 use PrinsFrank\PdfParser\Document\ContentStream\Command\Operator\State\Interaction\ProducesPositionedTextElements;
+use PrinsFrank\PdfParser\Document\ContentStream\PositionedText\ColorState;
 use PrinsFrank\PdfParser\Document\ContentStream\PositionedText\PositionedTextElement;
 use PrinsFrank\PdfParser\Document\ContentStream\PositionedText\TextSegment\TextSegment;
 use PrinsFrank\PdfParser\Document\ContentStream\PositionedText\TransformationMatrix;
@@ -58,7 +59,13 @@ enum TextShowingOperator: string implements InteractsWithTextState, ProducesPosi
     }
 
     #[Override]
-    public function getPositionedTextElement(string $operands, TransformationMatrix $textMatrix, TransformationMatrix $globalTransformationMatrix, TextState $textState): PositionedTextElement {
+    public function getPositionedTextElement(
+        string $operands,
+        TransformationMatrix $textMatrix,
+        TransformationMatrix $globalTransformationMatrix,
+        TextState $textState,
+        ColorState $colorState,
+    ): PositionedTextElement {
         if ($this === self::MOVE_SHOW_SPACING) { // aw ac string: the spacing is applied to the text state
             $operands = substr($operands, strcspn($operands, '(<'));
         }

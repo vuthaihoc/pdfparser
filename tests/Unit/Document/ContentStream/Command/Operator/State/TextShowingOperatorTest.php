@@ -5,6 +5,7 @@ namespace PrinsFrank\PdfParser\Tests\Unit\Document\ContentStream\Command\Operato
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use PrinsFrank\PdfParser\Document\ContentStream\Command\Operator\State\TextShowingOperator;
+use PrinsFrank\PdfParser\Document\ContentStream\PositionedText\ColorState;
 use PrinsFrank\PdfParser\Document\ContentStream\PositionedText\TextSegment\TextSegment;
 use PrinsFrank\PdfParser\Document\ContentStream\PositionedText\TextState;
 use PrinsFrank\PdfParser\Document\ContentStream\PositionedText\TransformationMatrix;
@@ -17,7 +18,7 @@ class TextShowingOperatorTest extends TestCase {
 
         return array_map(
             static fn (TextSegment $segment) => [$segment->textString->getBinaryString(), $segment->offset],
-            $operator->getPositionedTextElement($operands, $identity, $identity, new TextState(null, 10))->textSegments,
+            $operator->getPositionedTextElement($operands, $identity, $identity, new TextState(null, 10), new ColorState())->textSegments,
         );
     }
 

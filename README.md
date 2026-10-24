@@ -15,12 +15,12 @@
 
 ### Installation
 
-```json
-{
-    "repositories": [{"type": "vcs", "url": "https://github.com/vuthaihoc/pdfparser"}],
-    "require": {"vuthaihoc/pdfparser": "dev-main"}
-}
+```bash
+composer require vuthaihoc/pdfparser:dev-main
 ```
+
+The package is on [Packagist](https://packagist.org/packages/vuthaihoc/pdfparser); there are no tagged releases yet, so
+require `dev-main` (or `3.x-dev`, its branch alias).
 
 The renderer needs `ext-imagick` (ImageMagick with FreeType; Liberation fonts and `fc-match` for fonts that are not
 embedded), `HttpRangeStream` needs `ext-curl`.

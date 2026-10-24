@@ -63,7 +63,7 @@ class RangeStreamTest extends TestCase {
 
         static::assertSame('2345', $stream->read(22, 4));
         static::assertSame(substr($content, 15, 30), $stream->read(15, 30));
-        static::assertSame(substr($content, 15, 30), $stream->read(15, 30));
+        static::assertSame(substr($content, 12, 30), $stream->read(12, 30)); // cached blocks only
         static::assertSame([[20, 29], [10, 19], [30, 49]], $calls);
         static::assertSame(3, $stream->requests);
         static::assertSame(40, $stream->bytesFetched);

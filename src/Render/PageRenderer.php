@@ -18,6 +18,7 @@ use PrinsFrank\PdfParser\Document\ContentStream\Command\Operator\State\PathPaint
 use PrinsFrank\PdfParser\Document\ContentStream\Command\Operator\State\XObjectOperator;
 use PrinsFrank\PdfParser\Document\ContentStream\ContentStreamParser;
 use PrinsFrank\PdfParser\Document\ContentStream\Object\TextObject;
+use PrinsFrank\PdfParser\Document\ContentStream\PositionedText\ColorState;
 use PrinsFrank\PdfParser\Document\ContentStream\PositionedText\PositionedTextElement;
 use PrinsFrank\PdfParser\Document\ContentStream\PositionedText\TextState;
 use PrinsFrank\PdfParser\Document\ContentStream\PositionedText\TransformationMatrix;
@@ -80,6 +81,8 @@ final class PageRenderer {
 
     /** @var array<int, ?Font> */
     private array $fontCache = [];
+
+    private ?ColorState $colorState = null;
 
     public function __construct(
         public readonly Document $document,
@@ -272,7 +275,7 @@ final class PageRenderer {
                             }
 
                             if ($operator instanceof ProducesPositionedTextElements && $state['textState']->fontName !== null) {
-                                $element = $operator->getPositionedTextElement($command->operands, $textMatrix, self::libMatrix($state['ctm']), $state['textState']);
+                                $element = $operator->getPositionedTextElement($command->operands, $textMatrix, self::libMatrix($state['ctm']), $state['textState'], $this->colorState ??= new ColorState()); // colours come from $state
                                 $advance = $this->text($element, $state);
                                 if ($advance != 0.0) {
                                     $textMatrix = (new TransformationMatrix(1, 0, 0, 1, $advance, 0))->multiplyWith($textMatrix);
