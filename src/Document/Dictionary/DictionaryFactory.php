@@ -6,6 +6,7 @@ namespace PrinsFrank\PdfParser\Document\Dictionary;
 use PrinsFrank\PdfParser\Document\Dictionary\DictionaryEntry\DictionaryEntryFactory;
 use PrinsFrank\PdfParser\Document\Security\EncryptionContext;
 use PrinsFrank\PdfParser\Exception\InvalidArgumentException;
+use PrinsFrank\PdfParser\Exception\ParseFailureException;
 use PrinsFrank\PdfParser\Exception\PdfParserException;
 
 /** @internal */
@@ -22,7 +23,12 @@ class DictionaryFactory {
             }
 
             /** @var non-empty-array<string, mixed>|string $value */
-            $dictionaryEntry = DictionaryEntryFactory::fromKeyValuePair($encryptionContext, $keyString, $value);
+            try {
+                $dictionaryEntry = DictionaryEntryFactory::fromKeyValuePair($encryptionContext, $keyString, $value);
+            } catch (ParseFailureException) {
+                continue; // one entry with a value of an unexpected type (e.g. /op false) should not make the whole object unreadable
+            }
+
             if ($dictionaryEntry === null) {
                 continue;
             }

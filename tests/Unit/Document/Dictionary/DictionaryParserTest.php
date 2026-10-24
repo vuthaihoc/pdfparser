@@ -632,4 +632,14 @@ class DictionaryParserTest extends TestCase {
             DictionaryParser::parse(null, $stream, 0, $stream->getSizeInBytes()),
         );
     }
+
+    public function testSkipsEntryWithValueOfUnexpectedType(): void {
+        $stream = new InMemoryStream('<< /Type /Pages /Count abc >>');
+        static::assertEquals(
+            new Dictionary(
+                new DictionaryEntry(DictionaryKey::TYPE, TypeNameValue::PAGES),
+            ),
+            DictionaryParser::parse(null, $stream, 0, $stream->getSizeInBytes()),
+        );
+    }
 }
