@@ -60,6 +60,8 @@ abstract class AbstractStream implements Stream {
 
     #[Override]
     public function toString(): string {
-        return $this->read(0, $this->getSizeInBytes());
+        $sizeInBytes = $this->getSizeInBytes();
+
+        return $sizeInBytes === 0 ? '' : $this->read(0, $sizeInBytes);
     }
 }

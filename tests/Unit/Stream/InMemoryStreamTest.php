@@ -21,6 +21,11 @@ class InMemoryStreamTest extends TestCase {
             ->read(0, -1);
     }
 
+    public function testToString(): void {
+        static::assertSame('foo', (new InMemoryStream('foo'))->toString());
+        static::assertSame('', (new InMemoryStream(''))->toString());
+    }
+
     public function testRead(): void {
         static::assertSame('foo', (new InMemoryStream('foo'))->read(0, 3));
         static::assertSame('o', (new InMemoryStream('foo'))->read(2, 1));
