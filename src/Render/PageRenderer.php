@@ -59,9 +59,6 @@ final class PageRenderer {
 
     private int $pending = 0;
 
-    /** @var array<string, true> clip ids defined in the current draw buffer */
-    private array $defined = [];
-
     private Fidelity $fidelity;
 
     /** @var array<string, int> */
@@ -143,7 +140,7 @@ final class PageRenderer {
             $this->interpret($content, $resources, $state, 0);
         } catch (Throwable $e) {
             $this->fidelity->add('content_error', $this->canvasWidth * $this->canvasHeight);
-            $this->stats['error'] = 1;
+            $this->stats['error'] = substr($e::class . ': ' . $e->getMessage() . ' at ' . basename($e->getFile()) . ':' . $e->getLine(), 0, 300);
         }
 
         $this->annotations($pageNumber, $state);
@@ -637,6 +634,7 @@ final class PageRenderer {
         $m = $this->device($state);
         $scale = sqrt(abs($m[0] * $m[3] - $m[1] * $m[2]));
         $this->useClip($state, $bbox);
+        $this->emitText();
         $this->draw->push();
         $this->draw->setFillRule($evenOdd ? Imagick::FILLRULE_EVENODD : Imagick::FILLRULE_NONZERO);
         $this->draw->setFillColor($fill ? self::css($this->rgb($state, false, $area), $state['fa'] * $state['ga']) : 'none');
@@ -711,9 +709,13 @@ final class PageRenderer {
     /** An axis-aligned rectangle path in device space, as [x0, y0, x1, y1] */
     private static function rectangle(array $cmds): ?array {
         $points = [];
-        foreach ($cmds as $cmd) {
+        foreach ($cmds as $i => $cmd) {
             if ($cmd[0] === 'C') {
                 return null;
+            }
+
+            if ($cmd[0] === 'M' && !in_array($cmds[$i + 1][0] ?? 'M', ['L', 'C'], true)) {
+                continue; // a moveto without a segment after it adds nothing to the clip
             }
 
             if ($cmd[0] === 'M' || $cmd[0] === 'L') {
@@ -742,10 +744,18 @@ final class PageRenderer {
         return [min($xs), min($ys), max($xs), max($ys)];
     }
 
+    /** @var array<string, mixed>|null the clip of the primitives queued in $this->draw, which are drawn on a layer */
+    private ?array $layerClip = null;
+
+    /** @var array{int, int, int, int}|null x, y, width and height of that layer on the canvas; null: nothing of it shows */
+    private ?array $layer = null;
+
     /**
-     * Before a primitive with device bounding box $bbox: switches the clip group of the draw buffer to the clip of
-     * $state. Consecutive primitives with the same clip share one group (Imagick builds the clip mask per group), and
-     * a primitive inside a rectangular clip needs none.
+     * Before a primitive with device bounding box $bbox: when its clip differs from the one of the queued primitives,
+     * draws those and starts a new group. A clipped group is drawn on a layer the size of the clip's bounding box
+     * (a rectangular clip needs nothing more, another one is applied as a mask once for the group) and composited:
+     * ImageMagick's clip-path renders a mask of the whole canvas every time it is set.
+     * A primitive inside a rectangular clip needs none.
      */
     private function useClip(array $state, ?array $bbox): void {
         $clip = $state['clip'];
@@ -763,47 +773,57 @@ final class PageRenderer {
             return;
         }
 
-        if ($this->activeClip !== null) {
-            $this->draw->pop();
-        }
-
-        $this->activeClip = $id;
+        $this->flush(); // also draws the queued text, which belongs to the clip group being left
         if ($clip === null) {
             return;
         }
 
-        if (!isset($this->defined[$clip['id']])) {
-            $this->draw->pushClipPath($clip['id']);
-            $this->draw->setClipRule($clip['evenOdd'] ? Imagick::FILLRULE_EVENODD : Imagick::FILLRULE_NONZERO);
-            $this->emitPath($clip['cmds']);
-            $this->draw->popClipPath();
-            $this->defined[$clip['id']] = true;
-        }
-
-        $this->draw->push();
-        $this->draw->setClipRule($clip['evenOdd'] ? Imagick::FILLRULE_EVENODD : Imagick::FILLRULE_NONZERO);
-        $this->draw->setClipPath($clip['id']);
+        $box = $clip['bbox'] ?? [0, 0, $this->canvasWidth, $this->canvasHeight];
+        $x = (int) max(0, floor($box[0]));
+        $y = (int) max(0, floor($box[1]));
+        $width = (int) min($this->canvasWidth, ceil($box[2])) - $x;
+        $height = (int) min($this->canvasHeight, ceil($box[3])) - $y;
+        $this->activeClip = $id;
+        $this->layerClip = $clip;
+        $this->layer = $width > 0 && $height > 0 ? [$x, $y, $width, $height] : null;
+        $this->draw->translate(-$x, -$y);
+        $this->stats['clip_groups'] = ($this->stats['clip_groups'] ?? 0) + 1;
     }
 
+    /** the font set on $this->draw */
+    private ?string $drawFont = null;
+
     private function newDraw(): void {
+        $this->drawFont = null;
         $this->activeClip = null;
+        $this->layerClip = null;
+        $this->layer = null;
         $this->draw = new ImagickDraw();
         $this->draw->setStrokeAntialias(true);
         $this->draw->setTextAntialias(true);
-        $this->defined = [];
         $this->pending = 0;
     }
 
     private function flush(): void {
-        if ($this->activeClip !== null) {
-            $this->draw->pop();
-            $this->activeClip = null;
-        }
-
-        if ($this->pending > 0) {
+        $this->emitText();
+        if ($this->pending > 0 && ($this->activeClip === null || $this->layer !== null)) {
             $this->enter('rasterize');
             try {
-                $this->canvas->drawImage($this->draw);
+                if ($this->activeClip === null) {
+                    $this->canvas->drawImage($this->draw);
+                } else {
+                    [$x, $y, $width, $height] = $this->layer;
+                    $layer = new Imagick();
+                    $layer->newImage($width, $height, new ImagickPixel('none'));
+                    $layer->setImageProperty('type:hinting', 'off');
+                    $layer->drawImage($this->draw);
+                    if ($this->layerClip !== null && $this->layerClip['rect'] === null) {
+                        $layer->compositeImage($this->clipMask($this->layerClip, $x, $y, $width, $height), Imagick::COMPOSITE_DSTIN, 0, 0);
+                    }
+
+                    $this->canvas->compositeImage($layer, Imagick::COMPOSITE_OVER, $x, $y);
+                    $layer->clear();
+                }
             } catch (Throwable) {
                 $this->stats['draw_errors'] = ($this->stats['draw_errors'] ?? 0) + 1;
             } finally {
@@ -814,6 +834,25 @@ final class PageRenderer {
         }
 
         $this->newDraw();
+    }
+
+    /**
+     * The clip path of $clip as an alpha mask of the area $x, $y, $width × $height of the canvas
+     *
+     * @param array<string, mixed> $clip
+     */
+    private function clipMask(array $clip, int $x, int $y, int $width, int $height): Imagick {
+        $mask = new Imagick();
+        $mask->newImage($width, $height, new ImagickPixel('none'));
+        $draw = new ImagickDraw();
+        $draw->setFillColor('white');
+        $draw->setStrokeColor('none');
+        $draw->setFillRule($clip['evenOdd'] ? Imagick::FILLRULE_EVENODD : Imagick::FILLRULE_NONZERO);
+        $draw->translate(-$x, -$y);
+        $this->emitPath($clip['cmds'], $draw);
+        $mask->drawImage($draw);
+
+        return $mask;
     }
 
     private function flushIfManyPending(): void {
@@ -975,6 +1014,12 @@ final class PageRenderer {
         $wordSpace = $composite ? 0.0 : $textState->wordSpace * $yLength;
         $interword = $wordSpace != 0.0 ? $font->getWidthForChars([32], 0, 0, 1, 1) * $size + $wordSpace : 0.0;
         foreach ($runs as $run) {
+            if (count($run['codes']) <= 4 && $this->blank($font, $run['segments'])) {
+                // spaces in a font of their own (Word: no-break spaces in a Type0 font between the words) draw nothing
+                $this->stats['texts_blank'] = ($this->stats['texts_blank'] ?? 0) + 1;
+                continue;
+            }
+
             $runWidth = $width($run['codes']);
             if ($glyphFont !== null) {
                 // cut where a code has no glyph: the next part starts at its own place
@@ -1049,6 +1094,21 @@ final class PageRenderer {
         return $advance;
     }
 
+    /** @param list<\PrinsFrank\PdfParser\Document\ContentStream\PositionedText\TextSegment\TextSegment> $segments */
+    private function blank(Font $font, array $segments): bool {
+        $info = $this->fontInfo($font);
+        $text = '';
+        foreach ($segments as $segment) {
+            try {
+                $text .= $segment->getText($info['differences'], $info['encoding'], $info['toUnicode']);
+            } catch (Throwable) {
+                return false;
+            }
+        }
+
+        return $text !== '' && preg_match('/^[\s\x{00A0}\x{2000}-\x{200B}\x{3000}]+$/u', $text) === 1;
+    }
+
     /** @param list<float> $m text space → canvas */
     private static function translateText(array $m, float $tx, float $rise): array {
         return [$m[0], $m[1], $m[2], $m[3], $m[0] * $tx + $m[2] * $rise + $m[4], $m[1] * $tx + $m[3] * $rise + $m[5]];
@@ -1075,32 +1135,62 @@ final class PageRenderer {
         $this->noteState($state, $area);
         $stroke = $state['textState']->render === 1 || $state['textState']->render === 5;
         $this->useClip($state, $bbox);
-        $this->draw->push();
-        $this->draw->setFont($file);
-        $this->draw->setFontSize($size);
-        $this->draw->setStrokeColor('none');
-        $this->draw->setFillColor(self::css($this->rgb($state, $stroke, $area), ($stroke ? $state['sa'] : $state['fa']) * $state['ga']));
-        if ($kerning != 0.0) {
-            $this->draw->setTextKerning($kerning);
-        }
-
-        if ($interword != 0.0) {
-            $this->draw->setTextInterwordSpacing($interword);
-        }
-
-        $this->draw->translate($origin[4], $origin[5]);
-        if ($angle != 0.0) {
-            $this->draw->rotate($angle);
-        }
-
-        if (abs($stretch - 1) > 0.001) {
-            $this->draw->scale($stretch, 1);
-        }
-
-        $this->draw->annotation(0, 0, $text);
-        $this->draw->pop();
+        $colour = self::css($this->rgb($state, $stroke, $area), ($stroke ? $state['sa'] : $state['fa']) * $state['ga']);
+        $this->textQueue[$file][] = [$text, $origin[4], $origin[5], $size, $stretch, $kerning, $interword, $angle, $colour];
         $this->pending++;
         $this->flushIfManyPending();
+    }
+
+    /** @var array<string, list<array{string, float, float, float, float, float, float, float, string}>> font file => runs */
+    private array $textQueue = [];
+
+    /**
+     * Queues the text runs drawn since the last other primitive (or clip change) font by font: ImageMagick 6 leaks
+     * ~20 KB every time the font of a text changes, and Word puts the spaces between words in a font of their own.
+     * Text over text is rare enough for the order among them not to matter; paths and images keep their place.
+     */
+    private function emitText(): void {
+        foreach ($this->textQueue as $file => $runs) {
+            if ($file !== $this->drawFont) {
+                try {
+                    $this->draw->setFont($file); // outside push/pop, so it is set once per font
+                } catch (Throwable) {
+                    $this->stats['font_errors'] = ($this->stats['font_errors'] ?? 0) + count($runs);
+                    continue;
+                }
+
+                $this->drawFont = $file;
+                $this->stats['font_switches'] = ($this->stats['font_switches'] ?? 0) + 1;
+            }
+
+            foreach ($runs as [$text, $x, $y, $size, $stretch, $kerning, $interword, $angle, $colour]) {
+                $this->draw->push();
+                $this->draw->setFontSize($size);
+                $this->draw->setStrokeColor('none');
+                $this->draw->setFillColor($colour);
+                if ($kerning != 0.0) {
+                    $this->draw->setTextKerning($kerning);
+                }
+
+                if ($interword != 0.0) {
+                    $this->draw->setTextInterwordSpacing($interword);
+                }
+
+                $this->draw->translate($x, $y);
+                if ($angle != 0.0) {
+                    $this->draw->rotate($angle);
+                }
+
+                if (abs($stretch - 1) > 0.001) {
+                    $this->draw->scale($stretch, 1);
+                }
+
+                $this->draw->annotation(0, 0, $text);
+                $this->draw->pop();
+            }
+        }
+
+        $this->textQueue = [];
     }
 
     /**
@@ -1183,6 +1273,7 @@ final class PageRenderer {
         if ($this->options->images === RenderOptions::IMAGES_BOX) {
             $this->fidelity->add('image_box', $area);
             $this->useClip($state, $bbox);
+            $this->emitText();
             $this->draw->push();
             $this->draw->setStrokeColor('none');
             $this->draw->setFillColor('#d6d6d6');
@@ -1200,7 +1291,7 @@ final class PageRenderer {
 
         $this->enter('image_decode');
         try {
-            $decoded = $decode((int) max(64, $area * 1.5 * $this->options->imageResolution ** 2), $this->rgb($state, false, $area));
+            $decoded = $decode((int) max(64, $area * 1.5 * ($this->options->imageResolution / max(1, $this->options->supersample)) ** 2), $this->rgb($state, false, $area));
         } finally {
             $this->leave();
         }
@@ -1260,12 +1351,9 @@ final class PageRenderer {
                 $image->evaluateImage(Imagick::EVALUATE_MULTIPLY, $state['fa'] * $state['ga'], Imagick::CHANNEL_ALPHA);
             }
 
-            $clip = $state['clip'];
+            $clip = $this->options->clipping ? $state['clip'] : null;
             if ($clip !== null) {
                 $box = $clip['rect'] ?? $clip['bbox'];
-                if ($clip['rect'] === null && $box !== null && !self::inside([$x, $y, $x + $image->getImageWidth(), $y + $image->getImageHeight()], $box)) {
-                    $this->fidelity->add('image_clip', $area);
-                }
 
                 if ($box !== null) {
                     $x0 = (int) max($x, floor($box[0]));
@@ -1279,6 +1367,12 @@ final class PageRenderer {
                     $image->cropImage($x1 - $x0, $y1 - $y0, $x0 - $x, $y0 - $y);
                     $image->setImagePage(0, 0, 0, 0);
                     [$x, $y] = [$x0, $y0];
+                }
+
+                if ($clip['rect'] === null) {
+                    $mask = $this->clipMask($clip, $x, $y, $image->getImageWidth(), $image->getImageHeight());
+                    $image->compositeImage($mask, Imagick::COMPOSITE_DSTIN, 0, 0);
+                    $mask->clear();
                 }
             }
 
@@ -1315,7 +1409,8 @@ final class PageRenderer {
 
         try {
             $content = ContentStreamParser::parse([$decorated])->content;
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            $this->stats['form_errors'][$objectNumber] = substr($e::class . ': ' . $e->getMessage(), 0, 160);
             if (count($bboxValues) === 4) {
                 $this->fidelity->add('content_error', $this->area($this->deviceBox($state, $bboxValues)));
             }
@@ -1340,7 +1435,8 @@ final class PageRenderer {
         $this->formStack[] = $objectNumber;
         try {
             $this->interpret($content, $resources, $state, $depth + 1);
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            $this->stats['form_errors'][$objectNumber] = substr($e::class . ': ' . $e->getMessage(), 0, 160);
             if (count($bboxValues) === 4) {
                 $this->fidelity->add('content_error', $this->area($this->deviceBox($state, $bboxValues)));
             }
@@ -1404,6 +1500,7 @@ final class PageRenderer {
         $coords = array_map(fn ($v) => $this->objects->number($v), $this->objects->array($shading['Coords'] ?? null) ?? []);
         $m = $this->device($state);
         $this->useClip($state, null);
+        $this->emitText();
         $this->draw->push();
         $this->draw->setStrokeColor('none');
         $drawn = false;
@@ -1588,15 +1685,7 @@ final class PageRenderer {
         $top = (int) floor($region[1]);
         $clip = $state['clip'];
         if ($clip !== null && $clip['rect'] === null && $this->options->clipping) {
-            $mask = new Imagick();
-            $mask->newImage($image->getImageWidth(), $image->getImageHeight(), new ImagickPixel('none'));
-            $draw = new ImagickDraw();
-            $draw->setFillColor('white');
-            $draw->setStrokeColor('none');
-            $draw->setFillRule($clip['evenOdd'] ? Imagick::FILLRULE_EVENODD : Imagick::FILLRULE_NONZERO);
-            $draw->translate(-$left, -$top);
-            $this->emitPath($clip['cmds'], $draw);
-            $mask->drawImage($draw);
+            $mask = $this->clipMask($clip, $left, $top, $image->getImageWidth(), $image->getImageHeight());
             $image->compositeImage($mask, Imagick::COMPOSITE_DSTIN, 0, 0);
             $mask->clear();
         }

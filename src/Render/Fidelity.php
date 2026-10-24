@@ -13,7 +13,6 @@ final class Fidelity {
     public const WEIGHTS = [
         'image_undecodable' => 1.0,   // image not drawn (JBIG2, unknown filter, broken data)
         'image_approximate' => 0.3,   // drawn with approximate colours or without a colour key mask
-        'image_clip' => 0.4,          // image drawn without its non-rectangular clip
         'shading_gradient' => 0.25,   // axial/radial shading drawn as a 2-colour gradient
         'shading_flat' => 0.6,        // other shadings, filled with one colour
         'pattern' => 0.5,             // pattern fill/stroke drawn with one colour

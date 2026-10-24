@@ -18,8 +18,14 @@ final class RawObjects {
     /** @var array<int, mixed> */
     private array $values = [];
 
-    /** @var array<int, string> */
+    /** @var array<int, ?string> decoded streams, see streamData() */
     private array $streams = [];
+
+    private const CACHED_STREAM_MAX = 1 << 20;
+
+    private const CACHE_BUDGET = 32 << 20;
+
+    private int $cachedBytes = 0;
 
     public function __construct(
         public readonly Document $document,
@@ -125,12 +131,18 @@ final class RawObjects {
         }
 
         try {
-            $object = $this->document->getObject($objectNumber);
-
-            return $this->streams[$objectNumber] = $object?->objectItem->getContent($this->document)->toString();
+            $data = $this->document->getObject($objectNumber)?->objectItem->getContent($this->document)->toString();
         } catch (Throwable) {
-            return $this->streams[$objectNumber] = null;
+            $data = null;
         }
+
+        // content streams, fonts and functions are used again on other pages; large streams (images) are not kept
+        if ($data === null || (strlen($data) <= self::CACHED_STREAM_MAX && $this->cachedBytes + strlen($data) <= self::CACHE_BUDGET)) {
+            $this->streams[$objectNumber] = $data;
+            $this->cachedBytes += strlen((string) $data);
+        }
+
+        return $data;
     }
 
     /** Stream data as stored, before filters (only for objects that are not inside an object stream; not decrypted) */

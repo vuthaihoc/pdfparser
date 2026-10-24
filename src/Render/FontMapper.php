@@ -109,7 +109,7 @@ final class FontMapper {
 
             $file = $directory . '/' . sha1($data) . '.' . $extension;
             if (!is_file($file)) {
-                file_put_contents($file, $data);
+                self::write($file, $data);
             }
 
             try {
@@ -202,7 +202,7 @@ final class FontMapper {
 
         $file = $directory . '/' . sha1($bytes) . ($ttf !== null ? '.ttf' : ($cff !== null ? '.otf' : '.pfa'));
         if (!is_file($file)) {
-            file_put_contents($file, $bytes);
+            self::write($file, $bytes);
         }
 
         try {
@@ -404,6 +404,16 @@ final class FontMapper {
         }
 
         return null;
+    }
+
+    /** Writes a font file whole or not at all: other processes may read it while it is written */
+    private static function write(string $file, string $bytes): void {
+        $temporary = $file . '.' . getmypid() . '.tmp';
+        if (file_put_contents($temporary, $bytes) === strlen($bytes)) {
+            @rename($temporary, $file);
+        } else {
+            @unlink($temporary);
+        }
     }
 
     private function probe(): Imagick {
