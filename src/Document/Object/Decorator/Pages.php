@@ -4,6 +4,7 @@ namespace PrinsFrank\PdfParser\Document\Object\Decorator;
 
 use PrinsFrank\PdfParser\Document\Dictionary\Dictionary;
 use PrinsFrank\PdfParser\Document\Dictionary\DictionaryKey\DictionaryKey;
+use PrinsFrank\PdfParser\Document\Dictionary\DictionaryValue\Integer\IntegerValue;
 use PrinsFrank\PdfParser\Document\Dictionary\DictionaryValue\Rectangle\Rectangle;
 use PrinsFrank\PdfParser\Document\Dictionary\DictionaryValue\Reference\ReferenceValue;
 use PrinsFrank\PdfParser\Document\Dictionary\DictionaryValue\Reference\ReferenceValueArray;
@@ -37,6 +38,56 @@ class Pages extends DecoratedObject {
         }
 
         return $kids;
+    }
+
+    /** The number of pages in this subtree according to its /Count entry */
+    public function getCount(): ?int {
+        return $this->getDictionary()->getValueForKey($this->document, DictionaryKey::COUNT, IntegerValue::class)?->value;
+    }
+
+    /**
+     * Page $pageNumber (1-based) of this subtree, going down the tree by the /Count of each kid, so only the nodes on
+     * the way to that page are read. A kid without /Count is read completely.
+     *
+     * @param list<int> $visitedObjectNrs
+     * @throws PdfParserException
+     */
+    public function getPageItem(int $pageNumber, array $visitedObjectNrs = []): ?Page {
+        $remaining = $pageNumber;
+        foreach ($this->getDictionary()->getValueForKey($this->document, DictionaryKey::KIDS, ReferenceValueArray::class)->referenceValues ?? [] as $referenceValue) {
+            if (in_array($referenceValue->objectNumber, $visitedObjectNrs, true)) {
+                continue;
+            }
+
+            $visitedObjectNrs[] = $referenceValue->objectNumber;
+            $kidObject = $this->document->getObject($referenceValue->objectNumber)
+                ?? throw new ParseFailureException(sprintf('Child with number %d could not be found', $referenceValue->objectNumber));
+            if ($kidObject instanceof Pages) {
+                if (($count = $kidObject->getCount()) === null) {
+                    $pageItems = $kidObject->getPageItems($visitedObjectNrs);
+                    if ($remaining <= count($pageItems)) {
+                        return $pageItems[$remaining - 1];
+                    }
+
+                    $remaining -= count($pageItems);
+                    continue;
+                }
+
+                if ($remaining <= $count) {
+                    return $kidObject->getPageItem($remaining, $visitedObjectNrs);
+                }
+
+                $remaining -= $count;
+            } elseif ($kidObject instanceof Page || $kidObject instanceof GenericObject) {
+                if ($remaining === 1) {
+                    return $kidObject instanceof Page ? $kidObject : new Page($referenceValue->objectNumber, $kidObject->objectItem, $this->document);
+                }
+
+                $remaining--;
+            }
+        }
+
+        return null;
     }
 
     /**

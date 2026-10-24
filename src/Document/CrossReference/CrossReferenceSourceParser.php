@@ -5,6 +5,7 @@ namespace PrinsFrank\PdfParser\Document\CrossReference;
 
 use PrinsFrank\PdfParser\Document\CrossReference\RawStream\ObjectPositionsFromRawStreamParser;
 use PrinsFrank\PdfParser\Document\CrossReference\Source\CrossReferenceSource;
+use PrinsFrank\PdfParser\Document\CrossReference\Source\LazilyRecoveredCrossReferenceSource;
 use PrinsFrank\PdfParser\Document\CrossReference\Source\RecoveredCrossReferenceSource;
 use PrinsFrank\PdfParser\Document\CrossReference\Source\Section\CrossReferenceSection;
 use PrinsFrank\PdfParser\Document\CrossReference\Stream\CrossReferenceStreamParser;
@@ -14,6 +15,7 @@ use PrinsFrank\PdfParser\Document\Dictionary\DictionaryValue\Integer\IntegerValu
 use PrinsFrank\PdfParser\Document\Generic\Marker;
 use PrinsFrank\PdfParser\Exception\ParseFailureException;
 use PrinsFrank\PdfParser\Exception\PdfParserException;
+use PrinsFrank\PdfParser\Stream\RangeStream;
 use PrinsFrank\PdfParser\Stream\Stream;
 
 /** @internal */
@@ -72,6 +74,10 @@ class CrossReferenceSourceParser {
                 ?? throw new ParseFailureException('Unable to determine crossReferenceType');
             $currentCrossReferenceSection = self::parseSection($stream, $crossReferenceType, $byteOffset, $eolPosByteOffset);
             $crossReferenceSections[] = $currentCrossReferenceSection;
+        }
+
+        if ($stream instanceof RangeStream) { // checking every object offset up front would download the whole file
+            return new LazilyRecoveredCrossReferenceSource($stream, ...$crossReferenceSections);
         }
 
         $crossReferenceSource = new CrossReferenceSource(... $crossReferenceSections);

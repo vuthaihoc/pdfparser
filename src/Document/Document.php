@@ -27,6 +27,7 @@ use PrinsFrank\PdfParser\Exception\NotImplementedException;
 use PrinsFrank\PdfParser\Exception\ParseFailureException;
 use PrinsFrank\PdfParser\Exception\PdfParserException;
 use PrinsFrank\PdfParser\Exception\RuntimeException;
+use PrinsFrank\PdfParser\Stream\RangeStream;
 use PrinsFrank\PdfParser\Stream\Stream;
 
 /** @api */
@@ -151,11 +152,20 @@ class Document {
 
     /** @throws PdfParserException */
     public function getPage(int $pageNumber): ?Page {
+        if (!isset($this->pages) && $this->stream instanceof RangeStream && $pageNumber >= 1) { // read only the page tree nodes on the way
+            return $this->getCatalog()->getPagesRoot()->getPageItem($pageNumber)
+                ?? ($this->getPages()[$pageNumber - 1] ?? null);
+        }
+
         return $this->getPages()[$pageNumber - 1] ?? null;
     }
 
     /** @throws PdfParserException */
     public function getNumberOfPages(): int {
+        if (!isset($this->pages) && $this->stream instanceof RangeStream && ($count = $this->getCatalog()->getPagesRoot()->getCount()) !== null) {
+            return $count;
+        }
+
         return count($this->getPages());
     }
 
