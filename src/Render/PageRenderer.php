@@ -26,6 +26,7 @@ use PrinsFrank\PdfParser\Document\Document;
 use PrinsFrank\PdfParser\Document\Object\Decorator\Font;
 use PrinsFrank\PdfParser\Document\Object\Decorator\Page;
 use PrinsFrank\PdfParser\Document\Object\Decorator\XObject;
+use PrinsFrank\PdfParser\Stream\RangeStream;
 use Throwable;
 
 /**
@@ -143,6 +144,17 @@ final class PageRenderer {
         $this->fidelity = new Fidelity($this->canvasWidth * $this->canvasHeight);
         $this->formStack = [];
         $resources = $this->objects->resources($pageNumber);
+        if ($this->document->stream instanceof RangeStream) {
+            $this->enter('prefetch');
+            try {
+                $this->prefetch($pageNumber, $resources, $crop !== null);
+            } catch (Throwable $e) {
+                $this->stats['prefetch_error'] = substr($e::class . ': ' . $e->getMessage(), 0, 200); // what is not fetched ahead is fetched when it is read
+            } finally {
+                $this->leave();
+            }
+        }
+
         $state = $this->initialState();
         try {
             $this->enter('parse');
@@ -183,6 +195,89 @@ final class PageRenderer {
         ];
 
         return new RenderResult($image, $this->fidelity->score(), $this->fidelity->issues(), $this->stats, $timings + ['total' => round((hrtime(true) - $start) / 1e9, 4)], $memory);
+    }
+
+    /**
+     * Fetches what the page will read in a few parallel rounds instead of one round trip per object (remote
+     * documents): its content, resources and the dictionaries of its fonts, then the programs of fonts that are not
+     * cached. Images are fetched with the rest unless only a region is drawn: then only the small ones.
+     *
+     * @param array<string, mixed> $resources
+     */
+    private function prefetch(int $pageNumber, array $resources, bool $cropped): void {
+        $page = $this->objects->dictionary($this->objects->value($pageNumber)) ?? [];
+        $fonts = self::references($this->objects->dictionary($resources['Font'] ?? null) ?? []);
+        $xobjects = self::references($this->objects->dictionary($resources['XObject'] ?? null) ?? []);
+        $whole = [...self::references([$page['Contents'] ?? null]), ...$fonts, ...self::references($this->objects->array($page['Annots'] ?? null) ?? [])];
+        foreach (['ExtGState', 'ColorSpace', 'Shading', 'Pattern'] as $key) {
+            $whole = [...$whole, ...self::references($this->objects->dictionary($resources[$key] ?? null) ?? [])];
+        }
+
+        $this->objects->prefetch($whole, $xobjects);
+        $contents = $this->objects->resolve($page['Contents'] ?? null);
+        $next = is_array($contents) && array_is_list($contents) ? self::references($contents) : []; // an indirect array of content streams
+        foreach ($xobjects as $objectNumber) {
+            $xobject = $this->objects->dictionary($this->objects->value($objectNumber)) ?? [];
+            // under a crop, small images are fetched too: one round trip costs more than their bytes
+            if ($this->objects->name($xobject['Subtype'] ?? null) === 'Form' || !$cropped || (int) $this->objects->number($xobject['Length'] ?? 0) < 262144) {
+                $next = [...$next, $objectNumber, ...self::references([$xobject['SMask'] ?? null, $xobject['Mask'] ?? null])];
+            }
+        }
+
+        // the dictionaries of the fonts, as deep as they go
+        $seen = array_fill_keys($fonts, true);
+        $frontier = $fonts;
+        for ($round = 0; $round < 4 && ($frontier !== [] || $next !== []); $round++) {
+            $found = [];
+            foreach ($frontier as $objectNumber) {
+                $value = $this->objects->value($objectNumber);
+                $items = is_array($value) && array_is_list($value) ? $value : array_intersect_key(is_array($value) ? $value : [], array_flip(['DescendantFonts', 'FontDescriptor', 'ToUnicode', 'Encoding', 'Widths', 'W']));
+                foreach (self::references(array_map(fn ($item) => is_array($item) && array_is_list($item) ? null : $item, $items)) as $reference) {
+                    $found[$reference] = true;
+                }
+
+                foreach ($items as $item) {
+                    if (is_array($item) && array_is_list($item)) { // DescendantFonts [12 0 R]
+                        foreach (self::references($item) as $reference) {
+                            $found[$reference] = true;
+                        }
+                    }
+                }
+            }
+
+            $frontier = array_values(array_diff(array_keys($found), array_keys($seen)));
+            $seen += array_fill_keys($frontier, true);
+            $this->objects->prefetch([...$frontier, ...$next]);
+            $next = [];
+        }
+
+        if ($this->options->text === RenderOptions::TEXT_EMBEDDED) {
+            $programs = [];
+            foreach ($fonts as $font) {
+                if (($program = $this->fonts->programToFetch($this->objects, $font)) !== null) {
+                    $programs[] = $program;
+                }
+            }
+
+            $this->objects->prefetch($programs);
+        }
+    }
+
+    /**
+     * Object numbers of the references among $values (not looking into the objects)
+     *
+     * @param array<mixed> $values
+     * @return list<int>
+     */
+    private static function references(array $values): array {
+        $numbers = [];
+        foreach ($values as $value) {
+            if ($value instanceof PdfReference) {
+                $numbers[] = $value->objectNumber;
+            }
+        }
+
+        return $numbers;
     }
 
     /** @var list<string> */

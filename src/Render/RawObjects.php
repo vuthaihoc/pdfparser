@@ -2,10 +2,13 @@
 
 namespace PrinsFrank\PdfParser\Render;
 
+use PrinsFrank\PdfParser\Document\Dictionary\DictionaryKey\DictionaryKey;
+use PrinsFrank\PdfParser\Document\Dictionary\DictionaryValue\Array\ArrayValue;
 use PrinsFrank\PdfParser\Document\Document;
 use PrinsFrank\PdfParser\Document\Generic\Marker;
 use PrinsFrank\PdfParser\Document\Object\Decorator\DecoratedObject;
 use PrinsFrank\PdfParser\Document\Object\Item\UncompressedObject\UncompressedObject;
+use PrinsFrank\PdfParser\Stream\RangeStream;
 use Throwable;
 
 /**
@@ -31,6 +34,52 @@ final class RawObjects {
         public readonly Document $document,
     ) {}
 
+    private string|false|null $documentId = false;
+
+    /** The /ID of the trailer, null when it has none: it identifies the file, and with an object number one of its objects */
+    public function documentId(): ?string {
+        if ($this->documentId === false) {
+            try {
+                $id = $this->document->crossReferenceSource->getValueForKey(DictionaryKey::ID, ArrayValue::class);
+                $parts = array_filter($id->value ?? [], 'is_string');
+                $this->documentId = $parts === [] ? null : implode('/', $parts);
+            } catch (Throwable) {
+                $this->documentId = null;
+            }
+        }
+
+        return $this->documentId;
+    }
+
+    /**
+     * Fetches objects of a remote document (RangeStream) together, before they are read one by one: $whole are
+     * fetched entirely, $heads only their first 4 KiB (the dictionary of a stream)
+     *
+     * @param list<int> $whole
+     * @param list<int> $heads
+     */
+    public function prefetch(array $whole, array $heads = []): void {
+        $stream = $this->document->stream;
+        if (!$stream instanceof RangeStream) {
+            return;
+        }
+
+        $ranges = [];
+        foreach (array_unique($whole) as $objectNumber) {
+            if (($range = $this->document->getObjectByteRange($objectNumber)) !== null) {
+                $ranges[] = $range;
+            }
+        }
+
+        foreach (array_unique($heads) as $objectNumber) {
+            if (($range = $this->document->getObjectByteRange($objectNumber)) !== null) {
+                $ranges[] = [$range[0], min($range[1], $range[0] + 4096)];
+            }
+        }
+
+        $stream->prefetch($ranges);
+    }
+
     /** The value of object $objectNumber: for a stream object its dictionary */
     public function value(int $objectNumber): mixed {
         if (array_key_exists($objectNumber, $this->values)) {
@@ -52,7 +101,12 @@ final class RawObjects {
         if ($item instanceof UncompressedObject) {
             $stream = $this->document->stream;
             $length = $item->endOffset - $item->startOffset;
-            $head = $stream->read($item->startOffset, max(1, min($length, 65536)));
+            // the dictionary of a stream is at its start: read no more than that from a remote stream
+            $head = $stream->read($item->startOffset, max(1, min($length, 4096)));
+            if ($this->streamKeyword($head) === null && $length > 4096) {
+                $head = $stream->read($item->startOffset, max(1, min($length, 65536)));
+            }
+
             $objPos = strpos($head, 'obj');
             $body = $objPos === false ? $head : substr($head, $objPos + 3);
             $streamPos = $this->streamKeyword($body);

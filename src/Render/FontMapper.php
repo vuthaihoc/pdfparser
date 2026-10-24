@@ -85,7 +85,7 @@ final class FontMapper {
     private array $glyphFonts = [];
 
     /** Changes when what is cached changes */
-    private const CACHE_VERSION = 1;
+    private const CACHE_VERSION = 2;
 
     /**
      * The embedded program of a font rebuilt to be drawn by glyph id (OpenType::text()), with the PDF widths as
@@ -104,38 +104,12 @@ final class FontMapper {
         }
 
         $this->glyphFonts[$fontObjectNumber] = false;
-        $top = $objects->dictionary($objects->value($fontObjectNumber)) ?? [];
-        $composite = isset($top['DescendantFonts']);
-        $font = $composite ? ($objects->dictionary(($objects->array($top['DescendantFonts']) ?? [])[0] ?? null) ?? []) : $top;
-        if ($composite && !in_array($objects->name($top['Encoding'] ?? null), ['Identity-H', 'Identity-V'], true)) {
-            return null; // codes would have to go through the CMap to become CIDs
-        }
-
-        $descriptor = $objects->dictionary($font['FontDescriptor'] ?? null) ?? [];
-        $kind = $program = null;
-        foreach (['FontFile' => 'type1', 'FontFile2' => 'truetype', 'FontFile3' => 'cff'] as $key => $programKind) {
-            if (($reference = $descriptor[$key] ?? null) instanceof PdfReference && ($programKind !== 'type1' || !$composite)) {
-                $kind = $programKind;
-                $program = $reference->objectNumber;
-                break;
-            }
-        }
-
-        // the stored bytes identify the program without decoding it; decoded only when it is not cached
-        $stored = $program === null ? null : ($objects->rawStreamBytes($program) ?? $objects->streamData($program));
-        if ($kind === null || $program === null || $stored === null || strlen($stored) < 32) {
+        $font = $this->describe($objects, $fontObjectNumber);
+        if ($font === null) {
             return null;
         }
 
-        [$widths, $default] = $this->pdfWidths($objects, $top, $font, $descriptor, $composite);
-        $encoding = $objects->resolve($top['Encoding'] ?? null);
-        $cidToGid = $font['CIDToGIDMap'] ?? null;
-        $key = sha1(json_encode([
-            self::CACHE_VERSION, $kind, sha1($stored), $composite, $widths, $default,
-            is_string($encoding) ? $encoding : $objects->name(($objects->dictionary($encoding) ?? [])['BaseEncoding'] ?? null),
-            $this->differences($objects, $top),
-            $cidToGid instanceof PdfReference && !is_string($objects->resolve($cidToGid)) ? sha1((string) $objects->streamData($cidToGid->objectNumber)) : null,
-        ], JSON_THROW_ON_ERROR));
+        ['key' => $key, 'top' => $top, 'font' => $descendant, 'kind' => $kind, 'program' => $program, 'composite' => $composite, 'widths' => $widths, 'default' => $default] = $font;
         $cached = $this->readCache($key);
         if ($cached === false) {
             return null;
@@ -143,7 +117,7 @@ final class FontMapper {
 
         if ($cached === null) {
             $data = $objects->streamData($program);
-            $cached = $data === null ? null : $this->build($objects, $top, $font, $kind, $data, $composite, $widths, $default);
+            $cached = $data === null || strlen($data) < 32 ? null : $this->build($objects, $top, $descendant, $kind, $data, $composite, $widths, $default);
             if ($cached === null) {
                 $this->writeCache($key, ['failed' => true]);
 
@@ -176,6 +150,84 @@ final class FontMapper {
             'map' => static fn (int $code): ?int => $table[$code] ?? ($identity !== null && $code > 0 && $code < $identity ? $code : null),
             'space' => $cached['space'],
             'glyphCount' => $cached['glyphCount'],
+        ];
+    }
+
+    /**
+     * The object of the embedded program of a font that is not in the cache yet, to fetch it ahead (RawObjects::prefetch())
+     */
+    public function programToFetch(RawObjects $objects, int $fontObjectNumber): ?int {
+        if (array_key_exists($fontObjectNumber, $this->glyphFonts)) {
+            return null;
+        }
+
+        $font = $this->describe($objects, $fontObjectNumber);
+
+        return $font !== null && $this->readCache($font['key']) === null ? $font['program'] : null;
+    }
+
+    /**
+     * What identifies the rebuilt program of a font: its program, the encoding and the widths. The program is
+     * identified by the file's /ID and its object number, so it is not read when it is cached (over a network it
+     * would be fetched only to be hashed); by the hash of its stored bytes when the file has no /ID.
+     *
+     * @return array{key: string, top: array<string, mixed>, font: array<string, mixed>, kind: string, program: int, composite: bool, widths: array<int, float>, default: float}|null
+     */
+    private function describe(RawObjects $objects, int $fontObjectNumber): ?array {
+        $top = $objects->dictionary($objects->value($fontObjectNumber)) ?? [];
+        $composite = isset($top['DescendantFonts']);
+        $font = $composite ? ($objects->dictionary(($objects->array($top['DescendantFonts']) ?? [])[0] ?? null) ?? []) : $top;
+        if ($composite && !in_array($objects->name($top['Encoding'] ?? null), ['Identity-H', 'Identity-V'], true)) {
+            return null; // codes would have to go through the CMap to become CIDs
+        }
+
+        $descriptor = $objects->dictionary($font['FontDescriptor'] ?? null) ?? [];
+        $kind = $reference = null;
+        foreach (['FontFile' => 'type1', 'FontFile2' => 'truetype', 'FontFile3' => 'cff'] as $key => $programKind) {
+            if (($descriptor[$key] ?? null) instanceof PdfReference && ($programKind !== 'type1' || !$composite)) {
+                $kind = $programKind;
+                $reference = $descriptor[$key];
+                break;
+            }
+        }
+
+        if ($kind === null || !$reference instanceof PdfReference) {
+            return null;
+        }
+
+        $documentId = $objects->documentId();
+        $identify = static function (PdfReference $reference) use ($objects, $documentId): ?string {
+            if ($documentId !== null) {
+                return sha1($documentId) . ':' . $reference->objectNumber . ':' . $reference->generationNumber;
+            }
+
+            $stored = $objects->rawStreamBytes($reference->objectNumber) ?? $objects->streamData($reference->objectNumber);
+
+            return $stored === null ? null : sha1($stored);
+        };
+        $program = $identify($reference);
+        if ($program === null) {
+            return null;
+        }
+
+        [$widths, $default] = $this->pdfWidths($objects, $top, $font, $descriptor, $composite);
+        $encoding = $objects->resolve($top['Encoding'] ?? null);
+        $cidToGid = $font['CIDToGIDMap'] ?? null;
+
+        return [
+            'key' => sha1(json_encode([
+                self::CACHE_VERSION, $kind, $program, $composite, $widths, $default,
+                is_string($encoding) ? $encoding : $objects->name(($objects->dictionary($encoding) ?? [])['BaseEncoding'] ?? null),
+                $this->differences($objects, $top),
+                $cidToGid instanceof PdfReference && !is_string($objects->resolve($cidToGid)) ? $identify($cidToGid) : null,
+            ], JSON_THROW_ON_ERROR)),
+            'top' => $top,
+            'font' => $font,
+            'kind' => $kind,
+            'program' => $reference->objectNumber,
+            'composite' => $composite,
+            'widths' => $widths,
+            'default' => $default,
         ];
     }
 

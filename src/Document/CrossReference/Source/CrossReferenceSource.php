@@ -41,6 +41,23 @@ class CrossReferenceSource {
         return null;
     }
 
+    /** The entry as the cross-reference data has it, without the checks a subclass may make (which read the object) */
+    final public function getStoredCrossReferenceEntry(int $objNumber): CrossReferenceEntryInUseObject|CrossReferenceEntryCompressed|null {
+        foreach ($this->crossReferenceSections as $crossReferenceSection) {
+            try {
+                $crossReferenceEntry = $crossReferenceSection->getCrossReferenceEntry($objNumber);
+            } catch (RuntimeException) {
+                return null;
+            }
+
+            if ($crossReferenceEntry !== null) {
+                return $crossReferenceEntry;
+            }
+        }
+
+        return null;
+    }
+
     public function getReferenceForKey(DictionaryKey $dictionaryKey): ?ReferenceValue {
         return $this->getValueForKey($dictionaryKey, ReferenceValue::class);
     }
@@ -78,6 +95,37 @@ class CrossReferenceSource {
         }
 
         return $firstId;
+    }
+
+    /** @var list<int> */
+    private array $inUseByteOffsets;
+
+    /**
+     * Byte offsets of all objects in use, sorted: an object ends where the next one starts, so a byte range can be
+     * known (and fetched) before the object is parsed
+     *
+     * @return list<int>
+     */
+    public function getInUseByteOffsets(): array {
+        if (isset($this->inUseByteOffsets)) {
+            return $this->inUseByteOffsets;
+        }
+
+        $offsets = [];
+        foreach ($this->crossReferenceSections as $crossReferenceSection) {
+            foreach ($crossReferenceSection->crossReferenceSubSections as $crossReferenceSubSection) {
+                foreach ($crossReferenceSubSection->crossReferenceEntries as $crossReferenceEntry) {
+                    if ($crossReferenceEntry instanceof CrossReferenceEntryInUseObject) {
+                        $offsets[$crossReferenceEntry->byteOffsetInDecodedStream] = true;
+                    }
+                }
+            }
+        }
+
+        $offsets = array_keys($offsets);
+        sort($offsets);
+
+        return $this->inUseByteOffsets = $offsets;
     }
 
     public function hasInvalidByteOffset(Stream $stream): bool {

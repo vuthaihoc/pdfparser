@@ -95,6 +95,12 @@ $document->getPage(1)?->getText(); // reads the trailer, cross reference and obj
 `RangeStream` fetches and caches blocks (64 KiB by default) through any callable, so other transports (S3, ...) can be
 plugged in. Without Range support on the server the whole file is read once.
 
+Over a network the round trips cost more than the bytes, so `HttpRangeStream` requests the start and the end of the file
+together and fetches in parallel (`curl_multi`) what `RangeStream::prefetch()` is given: the page tree is walked one
+level per round trip, and the renderer fetches the content, resources and font dictionaries of a page in a few rounds
+(font programs only when they are not in the font cache, which identifies them by the file's /ID). A figure of a 1.9 MB
+PDF on a server ~0.5 s away: 6 round trips and 0.8 MB instead of 10 round trips, or downloading the whole file.
+
 ### Parser fixes
 
 - Page `/Contents` and Type0 `/DescendantFonts` that refer to an array of references.

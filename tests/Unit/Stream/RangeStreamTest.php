@@ -96,4 +96,32 @@ class RangeStreamTest extends TestCase {
         static::assertSame(str_repeat('abcdefghij', 1000), $stream->toString());
         unlink($path);
     }
+
+    public function testPrefetchFetchesMissingRunsInOneCall(): void {
+        $content = str_repeat('0123456789', 10);
+        $single = $many = [];
+        $stream = new RangeStream(
+            static function (int $from, int $to) use ($content, &$single): string {
+                $single[] = [$from, $to];
+
+                return substr($content, $from, $to - $from + 1);
+            },
+            strlen($content),
+            10,
+            null,
+            static function (array $ranges) use ($content, &$many): array {
+                $many[] = $ranges;
+
+                return array_map(static fn (array $range) => substr($content, $range[0], $range[1] - $range[0] + 1), $ranges);
+            },
+        );
+        $stream->read(30, 5);
+        $stream->prefetch([[0, 15], [28, 36], [70, 95]]);
+
+        static::assertSame([[30, 39]], $single);
+        static::assertSame([[[0, 29], [70, 99]]], $many);
+        static::assertSame(2, $stream->roundTrips);
+        static::assertSame('0123456789', $stream->read(70, 10));
+        static::assertSame([[30, 39]], $single); // nothing fetched for reads of prefetched blocks
+    }
 }

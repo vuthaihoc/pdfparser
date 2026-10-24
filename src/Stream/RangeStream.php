@@ -31,12 +31,14 @@ class RangeStream extends AbstractStream {
      * @param Closure(int $from, int $to): string $fetch
      * @param int<1, max> $blockSize
      * @param ?int $maxBlocks blocks kept at most (the oldest are dropped), null: all
+     * @param ?Closure(list<array{int, int}> $ranges): list<string> $fetchMany several inclusive ranges at once (in parallel), for prefetch()
      */
     public function __construct(
         private readonly Closure $fetch,
         private readonly int $size,
         private readonly int $blockSize = 65536,
         private readonly ?int $maxBlocks = null,
+        private readonly ?Closure $fetchMany = null,
     ) {
         if ($blockSize < 1) {
             throw new InvalidArgumentException('Block size must be at least 1 byte');
@@ -68,6 +70,67 @@ class RangeStream extends AbstractStream {
             return $bytes;
         }, $size, $blockSize, $maxBlocks);
     }
+
+    /**
+     * Fetches the blocks of all byte ranges [from, to) that are not here yet, at once: one call to fetchMany (in
+     * parallel) or, without it, one fetch per run of neighbouring missing blocks. For reads known in advance, whose
+     * one-by-one fetching would wait for each round trip in turn.
+     *
+     * @param list<array{int, int}> $ranges
+     */
+    public function prefetch(array $ranges): void {
+        $missing = [];
+        foreach ($ranges as [$from, $to]) {
+            $from = max(0, $from);
+            $to = min($this->size, $to);
+            for ($block = intdiv($from, $this->blockSize); $to > $from && $block <= intdiv($to - 1, $this->blockSize); $block++) {
+                if (!isset($this->blocks[$block])) {
+                    $missing[$block] = true;
+                }
+            }
+        }
+
+        ksort($missing);
+        $runs = [];
+        foreach (array_keys($missing) as $block) {
+            if ($runs !== [] && $runs[count($runs) - 1][1] === $block - 1) {
+                $runs[count($runs) - 1][1] = $block;
+            } else {
+                $runs[] = [$block, $block];
+            }
+        }
+
+        if ($runs === []) {
+            return;
+        }
+
+        if ($this->fetchMany === null || count($runs) === 1) {
+            foreach ($runs as [$firstBlock, $lastBlock]) {
+                $this->fetchBlocks($firstBlock, $lastBlock);
+            }
+
+            return;
+        }
+
+        $byteRanges = array_map(fn (array $run): array => [$run[0] * $this->blockSize, min($this->size, ($run[1] + 1) * $this->blockSize) - 1], $runs);
+        foreach (($this->fetchMany)($byteRanges) as $i => $bytes) {
+            [$from, $to] = $byteRanges[$i];
+            if (strlen($bytes) !== $to - $from + 1) {
+                throw new RuntimeException(sprintf('Expected %d bytes for range %d-%d, got %d', $to - $from + 1, $from, $to, strlen($bytes)));
+            }
+
+            $this->bytesFetched += strlen($bytes);
+            foreach (str_split($bytes, $this->blockSize) as $j => $chunk) {
+                $this->blocks[$runs[$i][0] + $j] = $chunk;
+            }
+        }
+
+        $this->requests += count($runs);
+        $this->roundTrips++;
+    }
+
+    /** Fetch calls and prefetch() rounds: the round trips a remote source waited for */
+    public int $roundTrips = 0;
 
     /** Seeds a block fetched by someone else, e.g. the first block of the request that found the size. */
     public function addBlock(int $blockNumber, string $bytes): void {
@@ -207,6 +270,7 @@ class RangeStream extends AbstractStream {
         }
 
         $this->requests++;
+        $this->roundTrips++;
         $this->bytesFetched += strlen($bytes);
         foreach (str_split($bytes, $this->blockSize) as $i => $chunk) {
             $this->blocks[$firstBlock + $i] = $chunk;

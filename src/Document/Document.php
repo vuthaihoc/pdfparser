@@ -127,6 +127,58 @@ class Document {
         throw new ParseFailureException(sprintf('Dictionary value with key "%s" is of type "%s", expected referencevalue(array)', $dictionaryKey->name, $dictionaryValueType ?? 'null'));
     }
 
+    /**
+     * Where object $objectNumber is stored, [from, to): from its offset to the next object's, or the object stream
+     * holding it. Known from the cross-reference data alone, so it can be fetched before it is parsed.
+     *
+     * @return array{int, int}|null
+     */
+    public function getObjectByteRange(int $objectNumber): ?array {
+        $entry = $this->crossReferenceSource->getStoredCrossReferenceEntry($objectNumber);
+        if ($entry instanceof CrossReferenceEntryCompressed) {
+            return $entry->storedInStreamWithObjectNumber === $objectNumber ? null : $this->getObjectByteRange($entry->storedInStreamWithObjectNumber);
+        }
+
+        if (!$entry instanceof CrossReferenceEntryInUseObject) {
+            return null;
+        }
+
+        $offsets = $this->crossReferenceSource->getInUseByteOffsets();
+        $start = $entry->byteOffsetInDecodedStream;
+        [$low, $high] = [0, count($offsets)];
+        while ($low < $high) { // the first offset after $start
+            $middle = intdiv($low + $high, 2);
+            if ($offsets[$middle] <= $start) {
+                $low = $middle + 1;
+            } else {
+                $high = $middle;
+            }
+        }
+
+        return [$start, $offsets[$low] ?? $this->stream->getSizeInBytes()];
+    }
+
+    /**
+     * Fetches objects of a remote document (RangeStream) at once, before they are read one by one, each up to
+     * $maxBytes (the dictionary of a stream is at its start); nothing for other streams
+     *
+     * @param list<int> $objectNumbers
+     */
+    public function prefetchObjects(array $objectNumbers, int $maxBytes = PHP_INT_MAX): void {
+        if (!$this->stream instanceof RangeStream) {
+            return;
+        }
+
+        $ranges = [];
+        foreach (array_unique($objectNumbers) as $objectNumber) {
+            if (($range = $this->getObjectByteRange($objectNumber)) !== null) {
+                $ranges[] = [$range[0], min($range[1], $range[0] + $maxBytes)];
+            }
+        }
+
+        $this->stream->prefetch($ranges);
+    }
+
     /** The references in object $objectNumber when it is an array of references, null for other objects */
     private function referencedReferenceArray(int $objectNumber): ?ReferenceValueArray {
         $crossReferenceEntry = $this->crossReferenceSource->getCrossReferenceEntry($objectNumber, $this);
