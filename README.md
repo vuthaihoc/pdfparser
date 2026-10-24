@@ -75,7 +75,8 @@ Presets (`RenderOptions::preset($name)` or the static constructors), measured on
 | `low_memory` | 85 % | 0.862 | small workers: ImageMagick pixel cache capped at 64 MB |
 | `draft` | 48 % | 0.793 | layout only: grey boxes for images |
 
-Each option can also be set on its own (`new RenderOptions(supersample: 1, images: RenderOptions::IMAGES_BOX, ...)`):
+Each option can also be set on its own (`new RenderOptions(supersample: 1, images: RenderOptions::IMAGES_BOX, ...)`,
+or on top of a preset: `RenderOptions::preset('fast')->with(imageResolution: 0.5)`):
 supersampling and downscale filter, embedded/substitute/no text, TJ split threshold, full/box/no images, image
 resolution and masks, paths, clipping, shading bands, annotations, ImageMagick memory and thread limits.
 

@@ -59,6 +59,11 @@ final class RenderOptions {
         public readonly ?string $fontCacheDirectory = null,
     ) {}
 
+    /** A copy with some options changed, e.g. RenderOptions::fast()->with(imageResolution: 0.5) */
+    public function with(mixed ...$changes): self {
+        return new self(...array_merge(get_object_vars($this), $changes));
+    }
+
     /** The defaults: embedded fonts, every construct drawn, 2× supersampling */
     public static function balanced(): self {
         return new self();
