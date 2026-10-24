@@ -35,11 +35,10 @@ final class ImageDecoder {
      */
     public function xobject(int $objectNumber, array $resources, array $fillRgb, int $targetPixels): array {
         $dictionary = $this->objects->dictionary($this->objects->value($objectNumber)) ?? [];
-        $data = $this->objects->streamData($objectNumber);
-        if ($data === null) {
-            $raw = $this->objects->rawStreamBytes($objectNumber);
-            $data = $raw === null ? null : $this->applyFilters($raw, $dictionary);
-        }
+        // the stored bytes through our own filters when they are not encrypted: PNG predictors are undone by libpng
+        $raw = $this->objects->document->fileEncryptionKey === null ? $this->objects->rawStreamBytes($objectNumber) : null;
+        $data = $raw === null ? null : $this->applyFilters($raw, $dictionary);
+        $data ??= $this->objects->streamData($objectNumber);
 
         if ($data === null) {
             return ['image' => null, 'reason' => 'filter ' . implode(',', $this->filters($dictionary)), 'approximate' => null];
@@ -130,6 +129,10 @@ final class ImageDecoder {
         $columns = (int) $this->objects->number($parm['Columns'] ?? 1, 1);
         $bpp = max(1, intdiv($colors * $bpc + 7, 8));
         $rowLength = intdiv($colors * $bpc * $columns + 7, 8);
+        if (($bpc === 8 || $bpc === 16) && in_array($colors, [1, 3, 4], true) && ($unpredicted = self::unpredictWithPng($data, $columns, $colors, $bpc, $rowLength)) !== null) {
+            return $unpredicted;
+        }
+
         $out = '';
         $previous = str_repeat("\0", $rowLength);
         $length = strlen($data);
@@ -157,6 +160,36 @@ final class ImageDecoder {
         }
 
         return $out;
+    }
+
+    /**
+     * PNG predictors are the row filters of PNG: given the rows as the image data of a PNG (grey, RGB, or RGBA for
+     * four components), libpng undoes them instead of a loop over every byte in PHP
+     */
+    private static function unpredictWithPng(string $data, int $columns, int $colors, int $bpc, int $rowLength): ?string {
+        $rows = intdiv(strlen($data), 1 + $rowLength);
+        if ($rows < 1) {
+            return null;
+        }
+
+        $chunk = static fn (string $type, string $body): string => pack('N', strlen($body)) . $type . $body . pack('N', crc32($type . $body));
+        $png = "\x89PNG\r\n\x1a\n"
+            . $chunk('IHDR', pack('NNCCCCC', $columns, $rows, $bpc, [1 => 0, 3 => 2, 4 => 6][$colors], 0, 0, 0))
+            . $chunk('IDAT', (string) gzcompress(substr($data, 0, $rows * (1 + $rowLength)), 0))
+            . $chunk('IEND', '');
+        try {
+            $image = new Imagick();
+            $image->readImageBlob($png);
+            $image->setImageDepth($bpc);
+            $image->setOption('endian', 'MSB');
+            $image->setImageFormat([1 => 'gray', 3 => 'rgb', 4 => 'rgba'][$colors]);
+            $raw = $image->getImageBlob();
+            $image->clear();
+        } catch (Throwable) {
+            return null;
+        }
+
+        return strlen($raw) === $rows * $rowLength ? $raw : null;
     }
 
     private static function paeth(int $a, int $b, int $c): int {
