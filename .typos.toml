@@ -12,3 +12,4 @@ ignore-hidden = false
 "paeth" = "paeth"
 "parms" = "parms"
 "nd" = "nd" # Type 1 font syntax: the RD and ND procedures of charstrings
+"loca" = "loca" # TrueType table of glyph locations
