@@ -45,7 +45,6 @@ readonly class PositionedTextElement {
         return $text;
     }
 
-    /** @return list<int> */
     /**
      * Character codes of the shown strings: a byte each for simple fonts, two bytes each for composite (Type0) fonts,
      * which is what font widths are keyed by (Identity-H/V: the code is the CID).
@@ -68,6 +67,7 @@ readonly class PositionedTextElement {
         return $codes;
     }
 
+    /** @return list<int> */
     public function getCodePoints(): array {
         $codePoints = [];
         foreach ($this->textSegments as $textSegment) {
