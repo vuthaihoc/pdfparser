@@ -108,7 +108,8 @@ class ContentStreamParser {
     public static function parse(array $contentsObjects): ContentStream {
         $content = [];
         $inComment = $inStringLiteral = $inResourceName = $inDictionary = $inInlineImage = false;
-        $inArrayLevel = $inStringLevel = 0;
+        $inArrayLevel = $inStringLevel = $stringDepth = 0;
+        $escapeNext = false;
         $textObject = $previousChar = $secondToLastChar = $thirdToLastChar = $previousContentStream = $startPreviousOperandIndex = $startOfCommentOffset = $endCommentOffset = null;
         foreach ($contentsObjects as $contentsObject) {
             $startCurrentOperandIndex = 0;
@@ -138,8 +139,14 @@ class ContentStreamParser {
                         }
                         $startCurrentOperandIndex = $index + 1;
                     }
-                } elseif ($inStringLiteral) {
-                    if ($char === ')' && $previousChar !== '\\') {
+                } elseif ($inStringLiteral) { // 7.3.4.2: balanced parentheses nest, a backslash escapes the next character (so "\\\\)" ends the string)
+                    if ($escapeNext) {
+                        $escapeNext = false;
+                    } elseif ($char === '\\') {
+                        $escapeNext = true;
+                    } elseif ($char === '(') {
+                        $stringDepth++;
+                    } elseif ($char === ')' && --$stringDepth === 0) {
                         $inStringLiteral = false;
                     }
                 } elseif ($inResourceName) {
@@ -163,6 +170,8 @@ class ContentStreamParser {
                     $inStringLevel++;
                 } elseif ($char === '(' && $previousChar !== '\\') {
                     $inStringLiteral = true;
+                    $stringDepth = 1;
+                    $escapeNext = false;
                 } elseif ($char === '/' && $previousChar !== '\\') {
                     $inResourceName = true;
                 } elseif ($inStringLevel > 0 || $inArrayLevel > 0) {

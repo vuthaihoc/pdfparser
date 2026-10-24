@@ -46,6 +46,28 @@ readonly class PositionedTextElement {
     }
 
     /** @return list<int> */
+    /**
+     * Character codes of the shown strings: a byte each for simple fonts, two bytes each for composite (Type0) fonts,
+     * which is what font widths are keyed by (Identity-H/V: the code is the CID).
+     *
+     * @return list<int>
+     */
+    public function getCharacterCodes(Font $font): array {
+        if ($font->getDescendantFonts() === []) {
+            return $this->getCodePoints();
+        }
+
+        $codes = [];
+        foreach ($this->textSegments as $textSegment) {
+            $bytes = $textSegment->textString->getCodePoints();
+            for ($i = 0; $i + 1 < count($bytes); $i += 2) {
+                $codes[] = ($bytes[$i] << 8) | $bytes[$i + 1];
+            }
+        }
+
+        return $codes;
+    }
+
     public function getCodePoints(): array {
         $codePoints = [];
         foreach ($this->textSegments as $textSegment) {
@@ -81,7 +103,7 @@ readonly class PositionedTextElement {
         $scaleX = $this->absoluteMatrix->scaleX;
         $fontSize = $this->textState->getFontSize();
 
-        $glyphAdvance = $font->getWidthForChars($this->getCodePoints(), $this->textState->wordSpace, $this->textState->charSpace, $fontSize, $scaleX); // Σ (w0·Tfs + Tc + Tw·[code 32]) · scaleX
+        $glyphAdvance = $font->getWidthForChars($this->getCharacterCodes($font), $this->textState->wordSpace, $this->textState->charSpace, $fontSize, $scaleX); // Σ (w0·Tfs + Tc + Tw·[code 32]) · scaleX
         $offsetAdvance = -($this->getTotalOffset() / 1000) * $fontSize * $scaleX;                                 // − Σ(Tj)/1000 · Tfs · scaleX
 
         return $this->advanceWidthCache = ($glyphAdvance + $offsetAdvance) * ($this->textState->scale / 100); // · Th

@@ -438,4 +438,20 @@ class ContentStreamParserTest extends TestCase {
             ContentStreamParser::parse([$decoratedObject]),
         );
     }
+
+    public function testParseStringsEndingWithEscapedBackslashOrWithNestedParentheses(): void {
+        $contentStream = FileStream::fromString("BT\n/F1 12 Tf\n(a\\\\) Tj\n(b(c)d) Tj\n(e\\)) Tj\nET\n");
+        $decoratedObject = $this->createMock(GenericObject::class);
+        $decoratedObject->expects(self::once())->method('getStream')->willReturn($contentStream);
+        static::assertEquals(
+            new ContentStream(
+                (new TextObject())
+                    ->addContentStreamCommand(new ContentStreamCommand(TextStateOperator::FONT_SIZE, '/F1 12'))
+                    ->addContentStreamCommand(new ContentStreamCommand(TextShowingOperator::SHOW, '(a\\\\)'))
+                    ->addContentStreamCommand(new ContentStreamCommand(TextShowingOperator::SHOW, '(b(c)d)'))
+                    ->addContentStreamCommand(new ContentStreamCommand(TextShowingOperator::SHOW, '(e\\))')),
+            ),
+            ContentStreamParser::parse([$decoratedObject]),
+        );
+    }
 }
