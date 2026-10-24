@@ -81,6 +81,7 @@ readonly class UncompressedObject implements ObjectItem {
             $this->startOffset,
             $this->endOffset,
             $dictionary,
+            $this->getEncryptionContext(),
         );
     }
 

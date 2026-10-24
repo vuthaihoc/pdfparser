@@ -8,6 +8,7 @@ use PrinsFrank\PdfParser\Document\Dictionary\DictionaryValue\Integer\IntegerValu
 use PrinsFrank\PdfParser\Document\Generic\Character\WhitespaceCharacter;
 use PrinsFrank\PdfParser\Document\Generic\Marker;
 use PrinsFrank\PdfParser\Document\Object\Item\CompressedObject\CompressedObjectContent\CompressedObjectContentParser;
+use PrinsFrank\PdfParser\Document\Security\EncryptionContext;
 use PrinsFrank\PdfParser\Exception\ParseFailureException;
 use PrinsFrank\PdfParser\Exception\PdfParserException;
 use PrinsFrank\PdfParser\Exception\RuntimeException;
@@ -16,7 +17,7 @@ use PrinsFrank\PdfParser\Stream\Stream;
 /** @internal */
 class CompressedObjectByteOffsetParser {
     /** @throws PdfParserException */
-    public static function parse(Stream $stream, int $startOffsetObject, int $endOffsetObject, Dictionary $dictionary): CompressedObjectByteOffsets {
+    public static function parse(Stream $stream, int $startOffsetObject, int $endOffsetObject, Dictionary $dictionary, ?EncryptionContext $encryptionContext = null): CompressedObjectByteOffsets {
         $startStreamPos = $stream->getStartNextLineAfter(Marker::STREAM, $startOffsetObject, $endOffsetObject)
             ?? throw new ParseFailureException(sprintf('Unable to locate marker %s', Marker::STREAM->value));
         if ($dictionary->getTypeForKey(DictionaryKey::LENGTH) === IntegerValue::class && ($lengthInteger = $dictionary->getValueForKey(null, DictionaryKey::LENGTH, IntegerValue::class)) !== null) {
@@ -29,7 +30,7 @@ class CompressedObjectByteOffsetParser {
             $length = $eolPos - $startStreamPos;
         }
 
-        $content = bin2hex(CompressedObjectContentParser::parseBinary(null, $stream, $startStreamPos, $length, $dictionary)->toString());
+        $content = bin2hex(CompressedObjectContentParser::parseBinary($encryptionContext, $stream, $startStreamPos, $length, $dictionary)->toString());
         $first = $dictionary->getValueForKey(null, DictionaryKey::FIRST, IntegerValue::class)
             ?? throw new RuntimeException('Expected a dictionary entry for "First", none found');
         $buffer = '';
