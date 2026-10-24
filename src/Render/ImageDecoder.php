@@ -25,12 +25,13 @@ final class ImageDecoder {
     public function __construct(
         private readonly RawObjects $objects,
         private readonly ColorResolver $colors,
+        private readonly bool $masks = true,
     ) {}
 
     /**
      * @param array<string, mixed> $resources
      * @param array{0: float, 1: float, 2: float} $fillRgb colour of stencil masks
-     * @return array{image: ?Imagick, reason: ?string, approximate: ?string}
+     * @return array{image: ?Imagick, reason: ?string, approximate: ?string, masksSkipped?: bool}
      */
     public function xobject(int $objectNumber, array $resources, array $fillRgb, int $targetPixels): array {
         $dictionary = $this->objects->dictionary($this->objects->value($objectNumber)) ?? [];
@@ -51,7 +52,7 @@ final class ImageDecoder {
      * @param string $operands operands of the EI command: "<entries> ID <data>"
      * @param array<string, mixed> $resources
      * @param array{0: float, 1: float, 2: float} $fillRgb
-     * @return array{image: ?Imagick, reason: ?string, approximate: ?string}
+     * @return array{image: ?Imagick, reason: ?string, approximate: ?string, masksSkipped?: bool}
      */
     public function inline(string $operands, array $resources, array $fillRgb, int $targetPixels): array {
         if (preg_match('/(?:^|\s)ID(\r\n|\s)/', $operands, $match, PREG_OFFSET_CAPTURE) !== 1) {
@@ -244,7 +245,7 @@ final class ImageDecoder {
      * @param array<string, mixed> $dictionary
      * @param array<string, mixed> $resources
      * @param array{0: float, 1: float, 2: float} $fillRgb
-     * @return array{image: ?Imagick, reason: ?string, approximate: ?string}
+     * @return array{image: ?Imagick, reason: ?string, approximate: ?string, masksSkipped?: bool}
      */
     private function decode(array $dictionary, string $data, array $resources, array $fillRgb, int $targetPixels, bool $allowMasks): array {
         $width = (int) $this->objects->number($dictionary['Width'] ?? 0);
@@ -310,6 +311,16 @@ final class ImageDecoder {
             }
         } catch (Throwable $e) {
             return ['image' => null, 'reason' => 'decode: ' . substr($e->getMessage(), 0, 60), 'approximate' => null];
+        }
+
+        if ($image->getImageWidth() * $image->getImageHeight() > $targetPixels * 4) { // a smaller copy is enough for where it goes
+            $scale = sqrt($targetPixels * 2 / ($image->getImageWidth() * $image->getImageHeight()));
+            $image->resizeImage(max(1, (int) round($image->getImageWidth() * $scale)), max(1, (int) round($image->getImageHeight() * $scale)), Imagick::FILTER_TRIANGLE, 1);
+        }
+
+        $hasMask = isset($dictionary['SMask']) || ($dictionary['Mask'] ?? null) instanceof PdfReference;
+        if ($allowMasks && !$this->masks && $hasMask) {
+            return ['image' => $image, 'reason' => null, 'approximate' => $approximate, 'masksSkipped' => true];
         }
 
         if ($allowMasks && isset($dictionary['SMask'])) {

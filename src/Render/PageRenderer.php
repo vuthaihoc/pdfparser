@@ -36,8 +36,6 @@ use Throwable;
  * @experimental
  */
 final class PageRenderer {
-    private const BANDS = 48;
-
     /** PDF blend modes drawn for images */
     private const BLEND_OPERATORS = [
         'Multiply' => Imagick::COMPOSITE_MULTIPLY, 'Screen' => Imagick::COMPOSITE_SCREEN, 'Overlay' => Imagick::COMPOSITE_OVERLAY,
@@ -69,9 +67,6 @@ final class PageRenderer {
     /** @var array<string, int> */
     private array $stats = [];
 
-    /** @var array<string, float> seconds */
-    private array $timings = [];
-
     /** @var list<float> page space → canvas */
     private array $base = [1, 0, 0, 1, 0, 0];
 
@@ -95,16 +90,29 @@ final class PageRenderer {
     ) {
         $this->objects = new RawObjects($document);
         $this->colors = new ColorResolver($this->objects);
-        $this->images = new ImageDecoder($this->objects, $this->colors);
+        $this->images = new ImageDecoder($this->objects, $this->colors, $options->imageMasks);
         $this->fonts = new FontMapper();
     }
 
     /** @param int $width width of the result in pixels */
     public function render(Page $page, int $width = 300): RenderResult {
-        $start = microtime(true);
+        $start = hrtime(true);
+        memory_reset_peak_usage();
+        if ($this->options->memoryLimit !== null) {
+            Imagick::setResourceLimit(Imagick::RESOURCETYPE_MEMORY, $this->options->memoryLimit);
+            Imagick::setResourceLimit(Imagick::RESOURCETYPE_MAP, 2 * $this->options->memoryLimit);
+        }
+
+        if ($this->options->threads !== null) {
+            Imagick::setResourceLimit(Imagick::RESOURCETYPE_THREAD, $this->options->threads);
+        }
+
         $supersample = max(1, $this->options->supersample);
         $this->stats = ['commands' => 0, 'paths' => 0, 'texts' => 0, 'invisible_texts' => 0, 'images' => 0, 'inline_images' => 0, 'forms' => 0, 'shadings' => 0, 'annotations' => 0];
-        $this->timings = ['images' => 0.0, 'text' => 0.0, 'draw' => 0.0];
+        $this->stages = [];
+        $this->stageTime = [];
+        $this->imagickPeak = 0;
+        $this->enter('interpret');
         $pageNumber = $page->objectNumber;
         $box = $this->box($pageNumber);
         $rotate = ((int) $this->objects->number($this->objects->inherited($pageNumber, 'Rotate') ?? 0) % 360 + 360) % 360;
@@ -125,7 +133,13 @@ final class PageRenderer {
         $resources = $this->objects->resources($pageNumber);
         $state = $this->initialState();
         try {
-            $content = $page->getContentStream()?->content ?? [];
+            $this->enter('parse');
+            try {
+                $content = $page->getContentStream()?->content ?? [];
+            } finally {
+                $this->leave();
+            }
+
             $this->interpret($content, $resources, $state, 0);
         } catch (Throwable $e) {
             $this->fidelity->add('content_error', $this->canvasWidth * $this->canvasHeight);
@@ -134,9 +148,10 @@ final class PageRenderer {
 
         $this->annotations($pageNumber, $state);
         $this->flush();
+        $this->enter('finish');
         $image = $this->canvas;
         if ($supersample > 1) {
-            $image->resizeImage(max(1, (int) round($this->canvasWidth / $supersample)), max(1, (int) round($this->canvasHeight / $supersample)), Imagick::FILTER_TRIANGLE, 1);
+            $image->resizeImage(max(1, (int) round($this->canvasWidth / $supersample)), max(1, (int) round($this->canvasHeight / $supersample)), $this->options->downscaleFilter, 1);
         }
 
         if ($rotate !== 0) {
@@ -145,8 +160,56 @@ final class PageRenderer {
 
         $image->setImageAlphaChannel(Imagick::ALPHACHANNEL_REMOVE);
         $image->setImageFormat('png');
+        $this->leave();
+        $this->leave();
+        $timings = array_map(static fn (int $ns): float => round($ns / 1e9, 4), $this->stageTime);
+        arsort($timings);
+        $memory = [
+            'php_peak_mb' => round(memory_get_peak_usage() / 1048576, 1),
+            'imagick_peak_mb' => round($this->imagickPeak / 1048576, 1),
+            'canvas_mb' => round($this->canvasWidth * $this->canvasHeight * 8 / 1048576, 1),
+        ];
 
-        return new RenderResult($image, $this->fidelity->score(), $this->fidelity->issues(), $this->stats, array_map(static fn ($t) => round($t, 3), $this->timings + ['total' => microtime(true) - $start]));
+        return new RenderResult($image, $this->fidelity->score(), $this->fidelity->issues(), $this->stats, $timings + ['total' => round((hrtime(true) - $start) / 1e9, 4)], $memory);
+    }
+
+    /** @var list<string> */
+    private array $stages = [];
+
+    private int $stageMark = 0;
+
+    /** @var array<string, int> stage => nanoseconds spent in it, not counting the stages entered from it */
+    private array $stageTime = [];
+
+    private int $imagickPeak = 0;
+
+    /**
+     * Time from here to the matching leave() goes to $stage: parse, interpret, paths, text, fonts, image_decode,
+     * image_place, shading, rasterize (ImageMagick drawing the queued paths and text), finish
+     */
+    private function enter(string $stage): void {
+        $now = hrtime(true);
+        $current = end($this->stages);
+        if ($current !== false) {
+            $this->stageTime[$current] = ($this->stageTime[$current] ?? 0) + $now - $this->stageMark;
+        }
+
+        $this->stages[] = $stage;
+        $this->stageMark = $now;
+    }
+
+    private function leave(): void {
+        $now = hrtime(true);
+        $stage = array_pop($this->stages);
+        if ($stage !== null) {
+            $this->stageTime[$stage] = ($this->stageTime[$stage] ?? 0) + $now - $this->stageMark;
+        }
+
+        $this->stageMark = $now;
+    }
+
+    private function sampleMemory(): void {
+        $this->imagickPeak = max($this->imagickPeak, Imagick::getResource(Imagick::RESOURCETYPE_MEMORY));
     }
 
     /** @return array{0: float, 1: float, 2: float, 3: float} */
@@ -502,19 +565,20 @@ final class PageRenderer {
         }
     }
 
-    private function emitPath(array $cmds): void {
-        $this->draw->pathStart();
+    private function emitPath(array $cmds, ?ImagickDraw $draw = null): void {
+        $draw ??= $this->draw;
+        $draw->pathStart();
         foreach ($cmds as $cmd) {
             match ($cmd[0]) {
-                'M' => $this->draw->pathMoveToAbsolute($cmd[1], $cmd[2]),
-                'L' => $this->draw->pathLineToAbsolute($cmd[1], $cmd[2]),
-                'C' => $this->draw->pathCurveToAbsolute($cmd[1], $cmd[2], $cmd[3], $cmd[4], $cmd[5], $cmd[6]),
-                'Z' => $this->draw->pathClose(),
+                'M' => $draw->pathMoveToAbsolute($cmd[1], $cmd[2]),
+                'L' => $draw->pathLineToAbsolute($cmd[1], $cmd[2]),
+                'C' => $draw->pathCurveToAbsolute($cmd[1], $cmd[2], $cmd[3], $cmd[4], $cmd[5], $cmd[6]),
+                'Z' => $draw->pathClose(),
                 default => null,
             };
         }
 
-        $this->draw->pathFinish();
+        $draw->pathFinish();
     }
 
     // ---------------------------------------------------------------- painting
@@ -542,8 +606,27 @@ final class PageRenderer {
 
         $area = $this->area($path['bbox']);
         $this->stats['paths']++;
+        if (!$this->options->paths) {
+            $this->fidelity->add('path_skipped', $area);
+
+            return;
+        }
+
+        $this->enter('paths');
+        try {
+            $this->drawPath($state, $cmds, $path['bbox'], $area, $fill, $stroke, $evenOdd);
+        } finally {
+            $this->leave();
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $state
+     * @param list<array<int|string, mixed>> $cmds
+     */
+    private function drawPath(array $state, array $cmds, ?array $bbox, float $area, bool $fill, bool $stroke, bool $evenOdd): void {
         $this->noteState($state, $area);
-        if ($fill && $state['fillCs']['family'] === 'Pattern' && $state['fillPattern'] !== null && $this->shadingPatternFill($state['fillPattern'], $state, $cmds, $evenOdd, $path['bbox'])) {
+        if ($fill && $state['fillCs']['family'] === 'Pattern' && $state['fillPattern'] !== null && $this->shadingPatternFill($state['fillPattern'], $state, $cmds, $evenOdd, $bbox)) {
             $fill = false;
         }
 
@@ -553,7 +636,7 @@ final class PageRenderer {
 
         $m = $this->device($state);
         $scale = sqrt(abs($m[0] * $m[3] - $m[1] * $m[2]));
-        $this->useClip($state, $path['bbox']);
+        $this->useClip($state, $bbox);
         $this->draw->push();
         $this->draw->setFillRule($evenOdd ? Imagick::FILLRULE_EVENODD : Imagick::FILLRULE_NONZERO);
         $this->draw->setFillColor($fill ? self::css($this->rgb($state, false, $area), $state['fa'] * $state['ga']) : 'none');
@@ -666,6 +749,11 @@ final class PageRenderer {
      */
     private function useClip(array $state, ?array $bbox): void {
         $clip = $state['clip'];
+        if (!$this->options->clipping && $clip !== null) {
+            $this->fidelity->add('clip_skipped', $this->area($bbox ?? $clip['bbox']));
+            $clip = null;
+        }
+
         if ($clip !== null && $clip['rect'] !== null && $bbox !== null && self::inside($bbox, $clip['rect'])) {
             $clip = null;
         }
@@ -713,21 +801,23 @@ final class PageRenderer {
         }
 
         if ($this->pending > 0) {
-            $start = microtime(true);
+            $this->enter('rasterize');
             try {
                 $this->canvas->drawImage($this->draw);
             } catch (Throwable) {
                 $this->stats['draw_errors'] = ($this->stats['draw_errors'] ?? 0) + 1;
+            } finally {
+                $this->leave();
             }
 
-            $this->timings['draw'] += microtime(true) - $start;
+            $this->sampleMemory();
         }
 
         $this->newDraw();
     }
 
     private function flushIfManyPending(): void {
-        if ($this->pending >= 1500) {
+        if ($this->pending >= $this->options->batchSize) {
             $this->flush();
         }
     }
@@ -790,7 +880,15 @@ final class PageRenderer {
      * other fonts are drawn with a substitute font stretched to the PDF width of the run.
      */
     private function text(PositionedTextElement $element, array $state): float {
-        $start = microtime(true);
+        $this->enter('text');
+        try {
+            return $this->layoutText($element, $state);
+        } finally {
+            $this->leave();
+        }
+    }
+
+    private function layoutText(PositionedTextElement $element, array $state): float {
         $textState = $element->textState;
         $font = $this->font($state);
         $fontSize = (float) $textState->getFontSize();
@@ -853,7 +951,22 @@ final class PageRenderer {
             return $advance;
         }
 
-        $glyphFont = $this->options->embeddedFonts && !$this->isType3($font) ? $this->fonts->glyphFont($this->objects, $font->objectNumber) : null;
+        if ($this->options->text === RenderOptions::TEXT_SKIP) {
+            $this->fidelity->add('text_skipped', $this->area([$m[4], $m[5] - $size, $m[4] + abs($advance) * $xLength, $m[5] + 0.3 * $size]));
+
+            return $advance;
+        }
+
+        $glyphFont = null;
+        if ($this->options->text === RenderOptions::TEXT_EMBEDDED && !$this->isType3($font)) {
+            $this->enter('fonts');
+            try {
+                $glyphFont = $this->fonts->glyphFont($this->objects, $font->objectNumber);
+            } finally {
+                $this->leave();
+            }
+        }
+
         $rise = $textState->rise;
         $angle = rad2deg(atan2($m[1], $m[0]));
         $stretch = $yLength > 0 ? $th * $xLength / $yLength : 1.0;
@@ -916,16 +1029,22 @@ final class PageRenderer {
                 continue;
             }
 
-            $file = $this->fonts->file($font->getBaseFont(), $font->isBold(), $font->isItalic(), $text, $this->fontFlags($font));
-            $spaces = substr_count($text, ' ');
-            $substituteInterword = $wordSpace != 0.0 && $spaces > 0 ? $this->fonts->width($file, ' ', $size) + $wordSpace : 0.0;
-            $natural = $this->fonts->width($file, $text, $size) + $kerning * (mb_strlen($text) - 1) + ($substituteInterword != 0.0 ? ($substituteInterword - $this->fonts->width($file, ' ', $size)) * $spaces : 0.0);
+            $this->enter('fonts');
+            try {
+                $file = $this->fonts->file($font->getBaseFont(), $font->isBold(), $font->isItalic(), $text, $this->fontFlags($font));
+                $spaces = substr_count($text, ' ');
+                $spaceWidth = $spaces > 0 ? $this->fonts->width($file, ' ', $size) : 0.0;
+                $textWidth = $this->fonts->width($file, $text, $size);
+            } finally {
+                $this->leave();
+            }
+
+            $substituteInterword = $wordSpace != 0.0 && $spaces > 0 ? $spaceWidth + $wordSpace : 0.0;
+            $natural = $textWidth + $kerning * (mb_strlen($text) - 1) + ($substituteInterword != 0.0 ? $wordSpace * $spaces : 0.0);
             $runStretch = $natural > 0 && $target > 0 ? max(0.3, min(3.0, $target / $natural)) : $stretch;
             $this->drawRun($file, $text, $m, $run['tx'], $rise, $size, $runStretch, $kerning, $substituteInterword, $target, $angle, $state, $this->isType3($font) ? 'type3_text' : 'text_substitute');
             $this->stats['texts_substitute'] = ($this->stats['texts_substitute'] ?? 0) + 1;
         }
-
-        $this->timings['text'] += microtime(true) - $start;
 
         return $advance;
     }
@@ -1038,7 +1157,7 @@ final class PageRenderer {
         $this->placeImage($state, fn (int $target, array $fill) => $this->images->inline($operands, $state['resources'], $fill, $target));
     }
 
-    /** @param callable(int, array): array{image: ?Imagick, reason: ?string, approximate: ?string} $decode */
+    /** @param callable(int, array): array{image: ?Imagick, reason: ?string, approximate: ?string, masksSkipped?: bool} $decode */
     private function placeImage(array $state, callable $decode): void {
         $m = $this->device($state);
         $topLeft = self::apply($m, 0, 1);
@@ -1055,19 +1174,47 @@ final class PageRenderer {
             return;
         }
 
+        if ($this->options->images === RenderOptions::IMAGES_SKIP) {
+            $this->fidelity->add('image_skipped', $area);
+
+            return;
+        }
+
+        if ($this->options->images === RenderOptions::IMAGES_BOX) {
+            $this->fidelity->add('image_box', $area);
+            $this->useClip($state, $bbox);
+            $this->draw->push();
+            $this->draw->setStrokeColor('none');
+            $this->draw->setFillColor('#d6d6d6');
+            $this->draw->polygon(array_map(static fn (array $p) => ['x' => $p[0], 'y' => $p[1]], [$topLeft, $topRight, $bottomRight, $bottomLeft]));
+            $this->draw->pop();
+            $this->pending++;
+            $this->flushIfManyPending();
+
+            return;
+        }
+
         if ($state['softMask']) {
             $this->fidelity->add('soft_mask', $area);
         }
 
-        $start = microtime(true);
-        $decoded = $decode((int) max(64, $area * 1.5), $this->rgb($state, false, $area));
+        $this->enter('image_decode');
+        try {
+            $decoded = $decode((int) max(64, $area * 1.5 * $this->options->imageResolution ** 2), $this->rgb($state, false, $area));
+        } finally {
+            $this->leave();
+        }
+
         $image = $decoded['image'];
         if ($image === null) {
             $this->fidelity->add('image_undecodable', $area);
             $this->stats['image_failures'][$decoded['reason']] = ($this->stats['image_failures'][$decoded['reason']] ?? 0) + 1;
-            $this->timings['images'] += microtime(true) - $start;
 
             return;
+        }
+
+        if ($decoded['masksSkipped'] ?? false) {
+            $this->fidelity->add('image_mask_skipped', $area);
         }
 
         if ($decoded['approximate'] !== null) {
@@ -1075,6 +1222,7 @@ final class PageRenderer {
         }
 
         $this->flush();
+        $this->enter('image_place');
         try {
             $image->setImageAlphaChannel(Imagick::ALPHACHANNEL_SET);
             $image->setImageVirtualPixelMethod(Imagick::VIRTUALPIXELMETHOD_TRANSPARENT);
@@ -1135,11 +1283,13 @@ final class PageRenderer {
             }
 
             $this->canvas->compositeImage($image, self::BLEND_OPERATORS[$state['bm']] ?? Imagick::COMPOSITE_OVER, $x, $y);
+            $this->sampleMemory();
         } catch (Throwable $e) {
             $this->fidelity->add('image_undecodable', $area);
             $this->stats['image_failures']['place: ' . substr($e->getMessage(), 0, 40)] = 1;
         } finally {
-            $this->timings['images'] += microtime(true) - $start;
+            $image->clear();
+            $this->leave();
         }
     }
 
@@ -1217,8 +1367,23 @@ final class PageRenderer {
         $this->shading($shading, $state, $state['clip']['bbox'] ?? [0, 0, $this->canvasWidth, $this->canvasHeight]);
     }
 
-    /** Paints $shading over $region (device space) under the clip of $state; true when drawn as bands */
+    /** Paints $shading over $region (device space) under the clip of $state; true when drawn as bands (or skipped) */
     private function shading(mixed $shadingValue, array $state, array $region): bool {
+        if ($this->options->shadings === RenderOptions::SHADINGS_SKIP) {
+            $this->fidelity->add('shading_skipped', $this->area($region));
+
+            return true;
+        }
+
+        $this->enter('shading');
+        try {
+            return $this->drawShading($shadingValue, $state, $region);
+        } finally {
+            $this->leave();
+        }
+    }
+
+    private function drawShading(mixed $shadingValue, array $state, array $region): bool {
         $shading = $this->objects->dictionary($shadingValue);
         if ($shading === null) {
             return false;
@@ -1226,6 +1391,7 @@ final class PageRenderer {
 
         $this->stats['shadings']++;
         $type = (int) $this->objects->number($shading['ShadingType'] ?? 0);
+        $this->stats['shading_types'][$type] = ($this->stats['shading_types'][$type] ?? 0) + 1;
         $cs = $this->colors->colorSpace($shading['ColorSpace'] ?? '/DeviceRGB', $state['resources']);
         $function = PdfFunction::from($this->objects, $shading['Function'] ?? null);
         $domain = array_map(fn ($v) => $this->objects->number($v), $this->objects->array($shading['Domain'] ?? null) ?? [0, 1]);
@@ -1241,49 +1407,47 @@ final class PageRenderer {
         $this->draw->push();
         $this->draw->setStrokeColor('none');
         $drawn = false;
-        if ($type === 2 && count($coords) === 4 && $function !== null) {
+        $bands = max(2, $this->options->shadingBands);
+        $flat = $this->options->shadings === RenderOptions::SHADINGS_FLAT;
+        if (!$flat && $type === 2 && count($coords) === 4 && $function !== null) {
             [$x0, $y0] = self::apply($m, $coords[0], $coords[1]);
             [$x1, $y1] = self::apply($m, $coords[2], $coords[3]);
-            $dx = $x1 - $x0;
-            $dy = $y1 - $y0;
-            $length = sqrt($dx * $dx + $dy * $dy);
-            if ($length > 0.01) {
-                [$ux, $uy] = [$dx / $length, $dy / $length];
-                [$px, $py] = [-$uy, $ux];
-                $reach = sqrt(($region[2] - $region[0]) ** 2 + ($region[3] - $region[1]) ** 2) + $length;
-                for ($i = -1; $i <= self::BANDS; $i++) {
-                    $t0 = $i < 0 ? -$reach / $length : $i / self::BANDS;
-                    $t1 = $i === self::BANDS ? 1 + $reach / $length : ($i + 1) / self::BANDS;
-                    $tc = max(0.0, min(1.0, ($t0 + $t1) / 2));
-                    $this->draw->setFillColor(self::css($colorAt($domain[0] + $tc * (($domain[1] ?? 1) - $domain[0])), $state['fa']));
-                    $a = [$x0 + $ux * $t0 * $length, $y0 + $uy * $t0 * $length];
-                    $b = [$x0 + $ux * $t1 * $length, $y0 + $uy * $t1 * $length];
-                    $this->draw->polygon([
-                        ['x' => $a[0] + $px * $reach, 'y' => $a[1] + $py * $reach], ['x' => $b[0] + $px * $reach + $ux, 'y' => $b[1] + $py * $reach + $uy],
-                        ['x' => $b[0] - $px * $reach + $ux, 'y' => $b[1] - $py * $reach + $uy], ['x' => $a[0] - $px * $reach, 'y' => $a[1] - $py * $reach],
-                    ]);
+            $region = [max(0.0, $region[0]), max(0.0, $region[1]), min($this->canvasWidth, $region[2]), min($this->canvasHeight, $region[3])];
+            if (($x1 - $x0) ** 2 + ($y1 - $y0) ** 2 > 0.0001 && $region[2] - $region[0] >= 1 && $region[3] - $region[1] >= 1) {
+                $lut = [];
+                for ($i = 0; $i < $bands; $i++) {
+                    $rgb = $colorAt($domain[0] + ($i + 0.5) / $bands * (($domain[1] ?? 1) - $domain[0]));
+                    $lut[] = pack('C4', (int) round(255 * $rgb[0]), (int) round(255 * $rgb[1]), (int) round(255 * $rgb[2]), 255);
                 }
 
-                $drawn = true;
+                $extend = $this->objects->array($shading['Extend'] ?? null) ?? [false, false];
+                $this->draw->pop();
+                $this->flush();
+                $this->placeShadingImage($this->axialImage($region, $x0, $y0, $x1, $y1, $lut, ($extend[0] ?? false) === true, ($extend[1] ?? false) === true), $region, $state);
+                $this->fidelity->add('shading_gradient', $area * 0.1);
+
+                return true;
             }
-        } elseif ($type === 3 && count($coords) === 6 && $function !== null) {
+        } elseif (!$flat && $type === 3 && count($coords) === 6 && $function !== null) {
             $scale = sqrt(abs($m[0] * $m[3] - $m[1] * $m[2]));
-            $extend = $this->objects->array($shading['Extend'] ?? null) ?? [false, false];
-            if (($extend[1] ?? false) === true) {
-                [$cx, $cy] = self::apply($m, $coords[3], $coords[4]);
-                $this->draw->setFillColor(self::css($colorAt($domain[1] ?? 1), $state['fa']));
-                $this->draw->rectangle($region[0], $region[1], $region[2], $region[3]);
-            }
+            $region = [max(0.0, $region[0]), max(0.0, $region[1]), min($this->canvasWidth, $region[2]), min($this->canvasHeight, $region[3])];
+            if ($region[2] - $region[0] >= 1 && $region[3] - $region[1] >= 1) {
+                $lut = [];
+                for ($i = 0; $i < $bands; $i++) {
+                    $rgb = $colorAt($domain[0] + ($i + 0.5) / $bands * (($domain[1] ?? 1) - $domain[0]));
+                    $lut[] = pack('C4', (int) round(255 * $rgb[0]), (int) round(255 * $rgb[1]), (int) round(255 * $rgb[2]), 255);
+                }
 
-            for ($i = self::BANDS; $i >= 0; $i--) {
-                $t = $i / self::BANDS;
-                [$cx, $cy] = self::apply($m, $coords[0] + $t * ($coords[3] - $coords[0]), $coords[1] + $t * ($coords[4] - $coords[1]));
-                $radius = ($coords[2] + $t * ($coords[5] - $coords[2])) * $scale;
-                $this->draw->setFillColor(self::css($colorAt($domain[0] + $t * (($domain[1] ?? 1) - $domain[0])), $state['fa']));
-                $this->draw->circle($cx, $cy, $cx + max(0.5, $radius), $cy);
-            }
+                $extend = $this->objects->array($shading['Extend'] ?? null) ?? [false, false];
+                [$cx0, $cy0] = self::apply($m, $coords[0], $coords[1]);
+                [$cx1, $cy1] = self::apply($m, $coords[3], $coords[4]);
+                $this->draw->pop();
+                $this->flush();
+                $this->placeShadingImage($this->radialImage($region, [$cx0, $cy0, $coords[2] * $scale], [$cx1, $cy1, $coords[5] * $scale], $lut, ($extend[0] ?? false) === true, ($extend[1] ?? false) === true), $region, $state);
+                $this->fidelity->add('shading_gradient', $area * 0.1);
 
-            $drawn = true;
+                return true;
+            }
         }
 
         if (!$drawn) {
@@ -1300,6 +1464,150 @@ final class PageRenderer {
         $this->pending++;
 
         return $drawn;
+    }
+
+    /**
+     * An axial shading over $region (device space) as an image: the colour of pixel x on a row is $lut[floor(t × n)],
+     * t its position along the axis (x0, y0) → (x1, y1); a row is built from runs of equal colour
+     *
+     * @param list<string> $lut RGBA bytes per band
+     */
+    private function axialImage(array $region, float $x0, float $y0, float $x1, float $y1, array $lut, bool $extend0, bool $extend1): Imagick {
+        [$left, $top] = [(int) floor($region[0]), (int) floor($region[1])];
+        $width = max(1, (int) ceil($region[2]) - $left);
+        $height = max(1, (int) ceil($region[3]) - $top);
+        $n = count($lut);
+        $before = $extend0 ? $lut[0] : "\0\0\0\0";
+        $after = $extend1 ? $lut[$n - 1] : "\0\0\0\0";
+        $dx = $x1 - $x0;
+        $dy = $y1 - $y0;
+        $length2 = $dx * $dx + $dy * $dy;
+        $step = $dx / $length2; // t per pixel along a row
+        $pixels = '';
+        $previous = null;
+        for ($row = 0; $row < $height; $row++) {
+            $t0 = (($left + 0.5 - $x0) * $dx + ($top + $row + 0.5 - $y0) * $dy) / $length2;
+            if ($previous !== null && $dy == 0.0) {
+                $pixels .= $previous;
+                continue;
+            }
+
+            $line = '';
+            for ($x = 0; $x < $width;) {
+                $k = max(-1, min($n, (int) floor(($t0 + $step * $x) * $n)));
+                if (abs($step) < 1e-12) {
+                    $next = $width;
+                } else {
+                    $boundary = $step > 0 ? ($k >= $n ? INF : ($k + 1) / $n) : ($k < 0 ? -INF : $k / $n);
+                    $next = is_infinite($boundary) ? $width : (int) max($x + 1, min($width, ceil(($boundary - $t0) / $step - 1e-9)));
+                }
+
+                $line .= str_repeat($k < 0 ? $before : ($k >= $n ? $after : $lut[$k]), $next - $x);
+                $x = $next;
+            }
+
+            $pixels .= $previous = $line;
+        }
+
+        $image = new Imagick();
+        $image->setSize($width, $height);
+        $image->setFormat('rgba');
+        $image->setOption('depth', '8');
+        $image->readImageBlob($pixels);
+        $image->setImagePage(0, 0, 0, 0);
+
+        return $image;
+    }
+
+    /**
+     * A radial shading over $region (device space) as an image (8.7.4.5.4): for each point the largest s with the
+     * point on the circle c0 + s(c1 − c0), r0 + s(r1 − r0); computed on a grid of at most ~40000 points and scaled up,
+     * the colours change slowly and the clip path is applied at full resolution afterwards
+     *
+     * @param array{float, float, float} $circle0 centre x, y and radius
+     * @param array{float, float, float} $circle1
+     * @param list<string> $lut RGBA bytes per band
+     */
+    private function radialImage(array $region, array $circle0, array $circle1, array $lut, bool $extend0, bool $extend1): Imagick {
+        [$left, $top] = [(int) floor($region[0]), (int) floor($region[1])];
+        $width = max(1, (int) ceil($region[2]) - $left);
+        $height = max(1, (int) ceil($region[3]) - $top);
+        $grid = max(1, (int) ceil(sqrt($width * $height / 40000)));
+        $columns = (int) ceil($width / $grid);
+        $rows = (int) ceil($height / $grid);
+        $n = count($lut);
+        [$x0, $y0, $r0] = $circle0;
+        [$cdx, $cdy, $dr] = [$circle1[0] - $x0, $circle1[1] - $y0, $circle1[2] - $r0];
+        $a = $cdx * $cdx + $cdy * $cdy - $dr * $dr;
+        $none = "\0\0\0\0";
+        $pixels = '';
+        for ($row = 0; $row < $rows; $row++) {
+            $py = $top + ($row + 0.5) * $grid - $y0;
+            for ($column = 0; $column < $columns; $column++) {
+                $px = $left + ($column + 0.5) * $grid - $x0;
+                $b = $px * $cdx + $py * $cdy + $r0 * $dr;
+                $c = $px * $px + $py * $py - $r0 * $r0;
+                if (abs($a) < 1e-9) {
+                    $roots = abs($b) < 1e-9 ? [] : [$c / (2 * $b)];
+                } else {
+                    $discriminant = $b * $b - $a * $c;
+                    $roots = $discriminant < 0 ? [] : [($b + sqrt($discriminant)) / $a, ($b - sqrt($discriminant)) / $a];
+                    rsort($roots);
+                }
+
+                $colour = $none;
+                foreach ($roots as $s) {
+                    if ($r0 + $s * $dr < 0 || ($s > 1 && !$extend1) || ($s < 0 && !$extend0)) {
+                        continue;
+                    }
+
+                    $colour = $lut[max(0, min($n - 1, (int) floor($s * $n)))];
+                    break;
+                }
+
+                $pixels .= $colour;
+            }
+        }
+
+        $image = new Imagick();
+        $image->setSize($columns, $rows);
+        $image->setFormat('rgba');
+        $image->setOption('depth', '8');
+        $image->readImageBlob($pixels);
+        $image->setImagePage(0, 0, 0, 0);
+        if ($grid > 1) {
+            $image->resizeImage($width, $height, Imagick::FILTER_TRIANGLE, 1);
+        }
+
+        return $image;
+    }
+
+    /** Composites a shading drawn as an image over $region, masked by the clip path and with the alpha of $state */
+    private function placeShadingImage(Imagick $image, array $region, array $state): void {
+        $left = (int) floor($region[0]);
+        $top = (int) floor($region[1]);
+        $clip = $state['clip'];
+        if ($clip !== null && $clip['rect'] === null && $this->options->clipping) {
+            $mask = new Imagick();
+            $mask->newImage($image->getImageWidth(), $image->getImageHeight(), new ImagickPixel('none'));
+            $draw = new ImagickDraw();
+            $draw->setFillColor('white');
+            $draw->setStrokeColor('none');
+            $draw->setFillRule($clip['evenOdd'] ? Imagick::FILLRULE_EVENODD : Imagick::FILLRULE_NONZERO);
+            $draw->translate(-$left, -$top);
+            $this->emitPath($clip['cmds'], $draw);
+            $mask->drawImage($draw);
+            $image->compositeImage($mask, Imagick::COMPOSITE_DSTIN, 0, 0);
+            $mask->clear();
+        }
+
+        if ($state['fa'] * $state['ga'] < 1) {
+            $image->evaluateImage(Imagick::EVALUATE_MULTIPLY, $state['fa'] * $state['ga'], Imagick::CHANNEL_ALPHA);
+        }
+
+        $this->canvas->compositeImage($image, self::BLEND_OPERATORS[$state['bm']] ?? Imagick::COMPOSITE_OVER, $left, $top);
+        $this->sampleMemory();
+        $image->clear();
     }
 
     /** Fills $cmds with a shading pattern (PatternType 2) drawn in bands; false for other patterns */
@@ -1337,6 +1645,10 @@ final class PageRenderer {
     // ---------------------------------------------------------------- annotations
 
     private function annotations(int $pageNumber, array $state): void {
+        if (!$this->options->annotations) {
+            return;
+        }
+
         $page = $this->objects->dictionary($this->objects->value($pageNumber)) ?? [];
         foreach ($this->objects->array($page['Annots'] ?? null) ?? [] as $annotationValue) {
             $annotation = $this->objects->dictionary($annotationValue);

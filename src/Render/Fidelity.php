@@ -28,6 +28,14 @@ final class Fidelity {
         'form_depth' => 1.0,          // form nesting too deep or recursive, skipped
         'annotation' => 0.5,          // annotation appearance that could not be drawn
         'content_error' => 1.0,       // the rest of a content stream after an error
+        // left out or simplified by RenderOptions
+        'image_box' => 0.9,
+        'image_skipped' => 1.0,
+        'image_mask_skipped' => 0.3,
+        'path_skipped' => 1.0,
+        'clip_skipped' => 0.2,
+        'text_skipped' => 1.0,
+        'shading_skipped' => 1.0,
     ];
 
     /** @var array<string, array{count: int, area: float}> */
