@@ -1319,7 +1319,10 @@ final class PageRenderer {
 
         $this->enter('image_decode');
         try {
-            $decoded = $decode((int) max(64, $area * 1.5 * ($this->options->imageResolution / max(1, $this->options->supersample)) ** 2), $this->rgb($state, false, $area));
+            // pixels for the whole image as large as it is on the canvas (a crop can show a small part of it big),
+            // capped: the decoder does not go above the image's own resolution anyway
+            $fullArea = min(abs($m[0] * $m[3] - $m[1] * $m[2]), 64e6);
+            $decoded = $decode((int) max(64, $fullArea * 1.5 * ($this->options->imageResolution / max(1, $this->options->supersample)) ** 2), $this->rgb($state, false, $area));
         } finally {
             $this->leave();
         }
@@ -1347,9 +1350,6 @@ final class PageRenderer {
             $image->setImageVirtualPixelMethod(Imagick::VIRTUALPIXELMETHOD_TRANSPARENT);
             $axisAligned = abs($m[1]) < 1e-6 && abs($m[2]) < 1e-6;
             if ($axisAligned) {
-                $width = max(1, (int) round(abs($m[0])));
-                $height = max(1, (int) round(abs($m[3])));
-                $image->resizeImage($width, $height, $width * $height < $image->getImageWidth() * $image->getImageHeight() ? Imagick::FILTER_TRIANGLE : Imagick::FILTER_LANCZOS, 1);
                 if ($m[0] < 0) {
                     $image->flopImage();
                 }
@@ -1358,20 +1358,54 @@ final class PageRenderer {
                     $image->flipImage();
                 }
 
-                $x = (int) round($bbox[0]);
-                $y = (int) round($bbox[1]);
+                // only the part of the image on the canvas is cut out of the source and scaled
+                $deviceWidth = abs($m[0]);
+                $deviceHeight = abs($m[3]);
+                $sourceWidth = $image->getImageWidth();
+                $sourceHeight = $image->getImageHeight();
+                $sx0 = (int) max(0, floor((max(0.0, $bbox[0]) - $bbox[0]) / $deviceWidth * $sourceWidth));
+                $sy0 = (int) max(0, floor((max(0.0, $bbox[1]) - $bbox[1]) / $deviceHeight * $sourceHeight));
+                $sx1 = (int) min($sourceWidth, ceil((min($this->canvasWidth, $bbox[2]) - $bbox[0]) / $deviceWidth * $sourceWidth));
+                $sy1 = (int) min($sourceHeight, ceil((min($this->canvasHeight, $bbox[3]) - $bbox[1]) / $deviceHeight * $sourceHeight));
+                if ($sx1 <= $sx0 || $sy1 <= $sy0) {
+                    return;
+                }
+
+                if ($sx0 > 0 || $sy0 > 0 || $sx1 < $sourceWidth || $sy1 < $sourceHeight) {
+                    $image->cropImage($sx1 - $sx0, $sy1 - $sy0, $sx0, $sy0);
+                    $image->setImagePage(0, 0, 0, 0);
+                }
+
+                $x = $bbox[0] + $sx0 * $deviceWidth / $sourceWidth;
+                $y = $bbox[1] + $sy0 * $deviceHeight / $sourceHeight;
+                $width = max(1, (int) round(($sx1 - $sx0) * $deviceWidth / $sourceWidth));
+                $height = max(1, (int) round(($sy1 - $sy0) * $deviceHeight / $sourceHeight));
+                $image->resizeImage($width, $height, $width * $height < ($sx1 - $sx0) * ($sy1 - $sy0) ? Imagick::FILTER_TRIANGLE : Imagick::FILTER_LANCZOS, 1);
+                $x = (int) round($x);
+                $y = (int) round($y);
             } else {
+                // scaled to at most the canvas resolution, then turned into place within the visible part only
                 $targetWidth = max(2, (int) round(sqrt(($topRight[0] - $topLeft[0]) ** 2 + ($topRight[1] - $topLeft[1]) ** 2)));
                 $targetHeight = max(2, (int) round(sqrt(($bottomLeft[0] - $topLeft[0]) ** 2 + ($bottomLeft[1] - $topLeft[1]) ** 2)));
-                $image->resizeImage($targetWidth, $targetHeight, Imagick::FILTER_TRIANGLE, 1);
+                $limit = 4 * max($this->canvasWidth, $this->canvasHeight);
+                $shrink = min(1.0, $limit / max($targetWidth, $targetHeight));
+                $sourceWidth = max(2, (int) round($targetWidth * $shrink));
+                $sourceHeight = max(2, (int) round($targetHeight * $shrink));
+                $image->resizeImage($sourceWidth, $sourceHeight, Imagick::FILTER_TRIANGLE, 1);
+                $x = (int) max(0, floor($bbox[0]));
+                $y = (int) max(0, floor($bbox[1]));
+                $viewWidth = (int) min($this->canvasWidth, ceil($bbox[2])) - $x;
+                $viewHeight = (int) min($this->canvasHeight, ceil($bbox[3])) - $y;
+                if ($viewWidth < 1 || $viewHeight < 1) {
+                    return;
+                }
+
+                $image->setImageArtifact('distort:viewport', sprintf('%dx%d+%d+%d', $viewWidth, $viewHeight, $x, $y));
                 $image->distortImage(Imagick::DISTORTION_AFFINE, [
                     0, 0, $topLeft[0], $topLeft[1],
-                    $targetWidth, 0, $topRight[0], $topRight[1],
-                    0, $targetHeight, $bottomLeft[0], $bottomLeft[1],
-                ], true);
-                $page = $image->getImagePage();
-                $x = (int) $page['x'];
-                $y = (int) $page['y'];
+                    $sourceWidth, 0, $topRight[0], $topRight[1],
+                    0, $sourceHeight, $bottomLeft[0], $bottomLeft[1],
+                ], false);
                 $image->setImagePage(0, 0, 0, 0);
             }
 
