@@ -11,12 +11,15 @@ use PrinsFrank\PdfParser\Exception\RuntimeException;
 /** @internal */
 class FlateDecode {
     /**
+     * @param int $columns samples per row (DecodeParms /Columns)
+     * @param int $colors components per sample (/Colors)
+     * @param int $bitsPerComponent (/BitsPerComponent)
      * @throws PdfParserException
      * @return string in binary format
      */
-    public static function decodeBinary(string $value, LZWFlatePredictorValue $predictor, int $columns = 1): string {
-        if ($columns < 1) {
-            throw new InvalidArgumentException(sprintf('Nr of columns should be equal to or bigger than 1, %d given', $columns));
+    public static function decodeBinary(string $value, LZWFlatePredictorValue $predictor, int $columns = 1, int $colors = 1, int $bitsPerComponent = 8): string {
+        if ($columns < 1 || $colors < 1 || $bitsPerComponent < 1) {
+            throw new InvalidArgumentException(sprintf('Columns, colors and bits per component should be 1 or more, %d, %d and %d given', $columns, $colors, $bitsPerComponent));
         }
 
         $decodedValue = @gzuncompress($value);
@@ -37,95 +40,94 @@ class FlateDecode {
             return $decodedValue;
         }
 
+        $rowLength = intdiv($columns * $colors * $bitsPerComponent + 7, 8);
         if ($predictor === LZWFlatePredictorValue::TIFFPredictor2) {
-            throw new ParseFailureException('Unsupported predictor ' . $predictor->value);
-        }
-
-        $hexTable = array_map(fn(string $row) => str_split($row, 2), str_split(bin2hex($decodedValue), ($columns + 1) * 2));
-        $decodedValue = '';
-        foreach ($hexTable as $rowIndex => $row) {
-            if (!is_array($row) || !array_is_list($row) || count($row) < 2) {
-                throw new RuntimeException(sprintf('Expected at least 2 items per row, got %d', count($row)));
+            if ($bitsPerComponent !== 8) {
+                throw new ParseFailureException(sprintf('Unsupported TIFF predictor with %d bits per component', $bitsPerComponent));
             }
 
-            if (!is_int($algorithmNumber = hexdec($row[0]))) {
-                throw new ParseFailureException(sprintf('Expected algorithm number to be an integer, got %s', $algorithmNumber));
-            }
-
-            $rowAlgorithm = PNGPredictorAlgorithm::tryFrom($algorithmNumber)
-                ?? throw new ParseFailureException(sprintf('Unrecognized row algorithm %d', $algorithmNumber));
-            if ($rowAlgorithm === PNGPredictorAlgorithm::None) {
-                $decodedValue .= implode('', array_slice($row, 1));
-            } elseif ($rowAlgorithm === PNGPredictorAlgorithm::Sub) {
-                foreach ($row as $columnIndex => $columnValue) {
-                    if ($columnIndex === 0) {
-                        continue;
-                    }
-
-                    $left = $columnIndex > 1 ? hexdec($hexTable[$rowIndex][$columnIndex - 1]) : 0;
-                    $hexTable[$rowIndex][$columnIndex] = str_pad(dechex((hexdec($columnValue) + $left) % 256), 2, '0', STR_PAD_LEFT);
-                }
-
-                $decodedValue .= implode('', array_slice($hexTable[$rowIndex], 1));
-            } elseif ($rowAlgorithm === PNGPredictorAlgorithm::Up) {
-                if ($rowIndex === 0) {
-                    $decodedValue .= implode('', array_slice($row, 1));
-
-                    continue;
-                }
-
-                foreach ($row as $columnIndex => $columnValue) {
-                    /** @phpstan-ignore offsetAccess.notFound, offsetAccess.notFound */
-                    $hexTable[$rowIndex][$columnIndex] = str_pad(dechex((hexdec($columnValue) + hexdec($hexTable[$rowIndex - 1][$columnIndex])) % 256), 2, '0', STR_PAD_LEFT);
-                }
-
-                $decodedValue .= implode('', array_slice($hexTable[$rowIndex], 1));
-            } elseif ($rowAlgorithm === PNGPredictorAlgorithm::Average) {
-                foreach ($row as $columnIndex => $columnValue) {
-                    if ($columnIndex === 0) {
-                        continue;
-                    }
-
-                    $left = $columnIndex > 1 ? hexdec($hexTable[$rowIndex][$columnIndex - 1]) : 0;
-                    $above = $rowIndex > 0 ? hexdec($hexTable[$rowIndex - 1][$columnIndex]) : 0;
-                    $hexTable[$rowIndex][$columnIndex] = str_pad(dechex((hexdec($columnValue) + (int) floor(($left + $above) / 2)) % 256), 2, '0', STR_PAD_LEFT);
-                }
-
-                $decodedValue .= implode('', array_slice($hexTable[$rowIndex], 1));
-            } elseif ($rowAlgorithm === PNGPredictorAlgorithm::Paeth) {
-                foreach ($row as $columnIndex => $columnValue) {
-                    if ($columnIndex === 0) {
-                        continue;
-                    }
-
-                    $left = $columnIndex > 1 ? hexdec($hexTable[$rowIndex][$columnIndex - 1]) : 0;
-                    $above = $rowIndex > 0 ? hexdec($hexTable[$rowIndex - 1][$columnIndex]) : 0;
-                    $upperLeft = ($rowIndex > 0 && $columnIndex > 1) ? hexdec($hexTable[$rowIndex - 1][$columnIndex - 1]) : 0;
-
-                    $p = $left + $above - $upperLeft;
-                    $pa = abs($p - $left);
-                    $pb = abs($p - $above);
-                    $pc = abs($p - $upperLeft);
-
-                    if ($pa <= $pb && $pa <= $pc) {
-                        $predictor = $left;
-                    } elseif ($pb <= $pc) {
-                        $predictor = $above;
-                    } else {
-                        $predictor = $upperLeft;
-                    }
-
-                    $hexTable[$rowIndex][$columnIndex] = str_pad(dechex((hexdec($columnValue) + $predictor) % 256), 2, '0', STR_PAD_LEFT);
-                }
-
-                $decodedValue .= implode('', array_slice($hexTable[$rowIndex], 1));
-            }
+            return self::tiffPredictor($decodedValue, $rowLength, $colors);
         }
 
-        if (($decodedValue = hex2bin($decodedValue)) === false) {
-            throw new ParseFailureException('Unable to hex2bin value "' . substr(trim($value), 0, 30) . '..."');
+        return self::pngPredictors($decodedValue, $rowLength, max(1, intdiv($colors * $bitsPerComponent + 7, 8)));
+    }
+
+    /**
+     * PNG predictors (7.4.4.4): every row starts with the number of its algorithm, which predicts each byte from the
+     * byte of the previous pixel ($bytesPerPixel back), the byte above it, or both
+     *
+     * @throws ParseFailureException
+     */
+    private static function pngPredictors(string $data, int $rowLength, int $bytesPerPixel): string {
+        $rows = [];
+        $previous = array_fill(0, $rowLength, 0);
+        $length = strlen($data);
+        for ($position = 0; $position < $length; $position += $rowLength + 1) {
+            $algorithm = PNGPredictorAlgorithm::tryFrom(ord($data[$position]))
+                ?? throw new ParseFailureException(sprintf('Unrecognized row algorithm %d', ord($data[$position])));
+            $row = self::bytes(str_pad(substr($data, $position + 1, $rowLength), $rowLength, "\0"));
+            switch ($algorithm) {
+                case PNGPredictorAlgorithm::None:
+                    break;
+                case PNGPredictorAlgorithm::Sub:
+                    for ($i = $bytesPerPixel; $i < $rowLength; $i++) {
+                        $row[$i] = ($row[$i] + $row[$i - $bytesPerPixel]) & 0xFF;
+                    }
+
+                    break;
+                case PNGPredictorAlgorithm::Up:
+                    for ($i = 0; $i < $rowLength; $i++) {
+                        $row[$i] = ($row[$i] + $previous[$i]) & 0xFF;
+                    }
+
+                    break;
+                case PNGPredictorAlgorithm::Average:
+                    for ($i = 0; $i < $rowLength; $i++) {
+                        $row[$i] = ($row[$i] + ((($i >= $bytesPerPixel ? $row[$i - $bytesPerPixel] : 0) + $previous[$i]) >> 1)) & 0xFF;
+                    }
+
+                    break;
+                case PNGPredictorAlgorithm::Paeth:
+                    for ($i = 0; $i < $rowLength; $i++) {
+                        $left = $i >= $bytesPerPixel ? $row[$i - $bytesPerPixel] : 0;
+                        $above = $previous[$i];
+                        $upperLeft = $i >= $bytesPerPixel ? $previous[$i - $bytesPerPixel] : 0;
+                        $estimate = $left + $above - $upperLeft;
+                        $distanceLeft = abs($estimate - $left);
+                        $distanceAbove = abs($estimate - $above);
+                        $distanceUpperLeft = abs($estimate - $upperLeft);
+                        $row[$i] = ($row[$i] + ($distanceLeft <= $distanceAbove && $distanceLeft <= $distanceUpperLeft ? $left : ($distanceAbove <= $distanceUpperLeft ? $above : $upperLeft))) & 0xFF;
+                    }
+
+                    break;
+            }
+
+            $rows[] = pack('C*', ...$row);
+            $previous = $row;
         }
 
-        return $decodedValue;
+        return implode('', $rows);
+    }
+
+    /** TIFF predictor 2 with 8 bits per component: every component is the difference with the same component of the previous pixel */
+    private static function tiffPredictor(string $data, int $rowLength, int $colors): string {
+        $rows = [];
+        foreach (str_split($data, max(1, $rowLength)) as $rowData) {
+            $row = self::bytes($rowData);
+            for ($i = $colors; $i < count($row); $i++) {
+                $row[$i] = ($row[$i] + $row[$i - $colors]) & 0xFF;
+            }
+
+            $rows[] = pack('C*', ...$row);
+        }
+
+        return implode('', $rows);
+    }
+
+    /** @return list<int> */
+    private static function bytes(string $data): array {
+        $bytes = unpack('C*', $data);
+
+        return $bytes === false ? [] : array_values(array_map(static fn (mixed $byte): int => is_int($byte) ? $byte : 0, $bytes));
     }
 }
