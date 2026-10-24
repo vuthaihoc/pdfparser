@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "ede2b9a7518a878d455776640c65ec16",
+    "content-hash": "c3495f0721c5e18866b9ddb59ece76ba",
     "packages": [
         {
             "name": "prinsfrank/glyph-lists",

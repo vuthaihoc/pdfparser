@@ -1,8 +1,13 @@
 {
-    "name": "prinsfrank/pdfparser",
-    "description": "PHP library to Read and extract text & images from PDFs - Fast & Low memory - Built from scratch",
+    "name": "vuthaihoc/pdfparser",
+    "description": "Fork of prinsfrank/pdfparser: PDF parsing, text & image extraction, plus an experimental Imagick page renderer, HTTP Range reading and parser fixes",
     "type": "library",
     "license": "MIT",
+    "homepage": "https://github.com/vuthaihoc/pdfparser",
+    "support": {
+        "source": "https://github.com/vuthaihoc/pdfparser",
+        "issues": "https://github.com/vuthaihoc/pdfparser/issues"
+    },
     "autoload": {
         "psr-4": {
             "PrinsFrank\\PdfParser\\": "src/"
@@ -20,6 +25,10 @@
         "ext-zlib": "*",
         "prinsfrank/glyph-lists": "^1.0",
         "prinsfrank/markdown-dom": "^0.2.1"
+    },
+    "suggest": {
+        "ext-imagick": "To render pages to images (PrinsFrank\\PdfParser\\Render)",
+        "ext-curl": "To read PDFs over HTTP Range requests (HttpRangeStream)"
     },
     "require-dev": {
         "friendsofphp/php-cs-fixer": "^3.65",
@@ -41,6 +50,11 @@
         "sort-packages": true,
         "platform": {
             "php": "8.2"
+        }
+    },
+    "extra": {
+        "branch-alias": {
+            "dev-main": "3.x-dev"
         }
     }
 }

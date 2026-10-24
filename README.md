@@ -5,6 +5,95 @@
 
 # PDF Parser
 
+> **This is a fork** of [prinsfrank/pdfparser](https://github.com/PrinsFrank/pdfparser) used by OneLib. It adds an
+> experimental page renderer, reading PDFs over HTTP Range requests and a set of parser fixes. The namespace is
+> unchanged (`PrinsFrank\PdfParser`) so upstream changes can still be merged; the upstream code is on the
+> [`upstream`](https://github.com/vuthaihoc/pdfparser/tree/upstream) branch. The rest of this README is upstream's,
+> from "Why this library?" on.
+
+## What this fork adds
+
+### Installation
+
+```json
+{
+    "repositories": [{"type": "vcs", "url": "https://github.com/vuthaihoc/pdfparser"}],
+    "require": {"vuthaihoc/pdfparser": "dev-main"}
+}
+```
+
+The renderer needs `ext-imagick` (ImageMagick with FreeType; Liberation fonts and `fc-match` for fonts that are not
+embedded), `HttpRangeStream` needs `ext-curl`.
+
+### Rendering pages (`PrinsFrank\PdfParser\Render`, experimental)
+
+```php
+use PrinsFrank\PdfParser\PdfParser;
+use PrinsFrank\PdfParser\Render\PageRenderer;
+use PrinsFrank\PdfParser\Render\RenderOptions;
+
+$document = (new PdfParser())->parseFile('document.pdf');
+$renderer = new PageRenderer($document, RenderOptions::preset('balanced'));
+$result = $renderer->render($document->getPage(1), 300); // 300 px wide
+
+$result->image->writeImage('page-1.png'); // Imagick
+$result->score;   // 0..1: how close the image probably is to a real renderer, from what was skipped or approximated
+$result->issues;  // what was skipped or approximated, with the share of the page it covers
+$result->timings; // seconds per stage: parse, interpret, text, fonts, image_decode, image_place, shading, rasterize, ...
+$result->memory;  // PHP and ImageMagick peaks
+```
+
+It draws paths, clipping, images (all filters and colour spaces, soft masks), forms, axial and radial shadings,
+annotation appearances and text. Text is drawn with the fonts embedded in the PDF: TrueType, CFF and Type 1 programs
+are rebuilt to be drawn by glyph id with the PDF widths, so text lands where the PDF puts it; fonts that are not
+embedded get a substitute system font stretched to the PDF width. Type 3 fonts, patterns other than shadings, blend
+modes and soft masks of groups are approximated, and count in the score.
+
+Presets (`RenderOptions::preset($name)` or the static constructors), measured on 336 pages of mixed documents at
+300 px against `pdftoppm`:
+
+| Preset | Time | SSIM | For |
+|---|---|---|---|
+| `balanced` (default) | 100 % (0.35 s/page) | 0.881 | general use |
+| `quality` | 122 % | 0.892 | closest result: 3× supersampling, Lanczos |
+| `fast` | 67 % | 0.855 | no supersampling, one run per string |
+| `thumbnail` | 68 % | 0.864 | previews up to ~200 px: substitute fonts |
+| `low_memory` | 85 % | 0.862 | small workers: ImageMagick pixel cache capped at 64 MB |
+| `draft` | 48 % | 0.793 | layout only: grey boxes for images |
+
+Each option can also be set on its own (`new RenderOptions(supersample: 1, images: RenderOptions::IMAGES_BOX, ...)`):
+supersampling and downscale filter, embedded/substitute/no text, TJ split threshold, full/box/no images, image
+resolution and masks, paths, clipping, shading bands, annotations, ImageMagick memory and thread limits.
+
+ImageMagick 6 leaks about 20 KB every time the font of a text changes; the renderer groups text by font to keep this
+to well under 1 MB per page, but long-running workers should still be restarted now and then.
+
+### Reading over HTTP Range requests
+
+```php
+use PrinsFrank\PdfParser\Stream\HttpRangeStream;
+
+$document = (new PdfParser())->parse(HttpRangeStream::open('https://example.com/document.pdf'));
+$document->getPage(1)?->getText(); // reads the trailer, cross reference and objects of that page only
+```
+
+`RangeStream` fetches and caches blocks (64 KiB by default) through any callable, so other transports (S3, ...) can be
+plugged in. Without Range support on the server the whole file is read once.
+
+### Parser fixes
+
+- Page `/Contents` and Type0 `/DescendantFonts` that refer to an array of references.
+- `Tj`/`TJ`/`"` operands tokenized: adjustments after whitespace or written as `.5`, escaped and nested parentheses,
+  `"` with spaces in its string.
+- Character codes from the bytes of a string (hexadecimal strings of Type0 fonts were read as 16-bit pairs).
+- FlateDecode PNG predictors per pixel and per row length (multi-component images came out as garbage) and much
+  faster, TIFF predictor 2.
+- Content strings ending in an escaped backslash; widths of composite fonts by 2-byte codes.
+- A dictionary entry with a value of an unexpected type is skipped instead of failing the whole dictionary.
+- `sh` and `b` operators; inline images as one `EI` command.
+- An empty stream is an empty string.
+
+
 [![GitHub](https://img.shields.io/badge/license-MIT-green)](https://github.com/PrinsFrank/pdfparser/blob/main/LICENSE)
 [![PHP Version Support](https://img.shields.io/packagist/php-v/prinsfrank/pdfparser)](https://github.com/PrinsFrank/pdfparser/blob/main/composer.json)
 [![codecov](https://codecov.io/gh/PrinsFrank/pdfparser/branch/main/graph/badge.svg?token=2KXO43MCIC)](https://codecov.io/gh/PrinsFrank/pdfparser)
@@ -52,6 +141,8 @@ To start right away, run the following command in your composer project;
 ```bash
 composer require prinsfrank/pdfparser
 ```
+
+(For this fork, see [Installation](#installation) above.)
 
 <details>
     <summary>Installation without Composer</summary>
